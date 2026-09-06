@@ -12,7 +12,7 @@ on:
 
 permissions:
   contents: write
-  models: read
+  copilot-requests: write
 
 concurrency:
   group: ai-release-${{ github.event.release.tag_name || inputs.tag }}
@@ -26,8 +26,15 @@ jobs:
       - name: Check out trusted release policy
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.event.repository.default_branch }}
+          ref: ${{ github.workflow_sha }}
           persist-credentials: false
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+
+      - name: Install the pinned GitHub Copilot CLI
+        run: npm install --global @github/copilot@1.0.83
 
       - name: Build bounded release context
         id: context
@@ -62,7 +69,6 @@ jobs:
                 status: file.status,
                 additions: file.additions,
                 deletions: file.deletions,
-                patch: (file.patch || "").slice(0, 3000),
               }));
             }
             fs.writeFileSync("release-context.json", JSON.stringify({
@@ -77,8 +83,11 @@ jobs:
 
       - name: Generate release notes
         id: notes
-        uses: actions/ai-inference@a7805884c80886efc241e94a5351df715968a0ad # v2.1.1
+        uses: actions/ai-inference@2c43c91ae16266ca159d311430343c67a5ffa222 # v3.0.0
+        env:
+          COPILOT_GITHUB_TOKEN: ${{ github.token }}
         with:
+          model: ''
           prompt-file: .github/prompts/release-notes.prompt.yml
           file_input: |
             release: ./release-context.json
@@ -93,8 +102,8 @@ jobs:
             const fs = require("node:fs");
             const path = require("node:path");
             const {pathToFileURL} = require("node:url");
-            const {parseModelJson} = await import(pathToFileURL(path.join(process.env.GITHUB_WORKSPACE, ".github/scripts/moderation.mjs")));
-            const notes = parseModelJson(fs.readFileSync(process.env.NOTES_FILE, "utf8"));
+            const policy = await import(pathToFileURL(path.join(process.env.GITHUB_WORKSPACE, ".github/scripts/moderation.mjs")));
+            const notes = policy.validateReleaseNotes(policy.parseModelJson(fs.readFileSync(process.env.NOTES_FILE, "utf8")));
             const release = await github.rest.repos.getRelease({...context.repo, release_id: Number(process.env.RELEASE_ID)});
             const section = (title, items) => items?.length ? `\n### ${title}\n\n${items.map(item => `- ${item}`).join("\n")}\n` : "";
             const generated = [
