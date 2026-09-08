@@ -10,6 +10,33 @@ All notable user-visible changes are recorded here. Versions follow [Semantic Ve
 - Automatically delete unmistakably unrelated or spam issues and close equivalent pull requests only when two independent reviews agree at 98% confidence; preserve technical criticism and relevant but flawed contributions.
 - Use GitHub's current Copilot inference path rather than the retired GitHub Models endpoint.
 
+## [0.9.0] — 2026-09-08
+
+### Added
+
+- Add `shell login`, which links a machine to an account from the terminal and returns to the web app. Sessions started with `shell` then appear there on their own.
+- Add organizations. Signing up creates one; an invite link joins one. Everyone in an organization sees every member's sessions, each of which has an owner and an assignee.
+- Add a web app that lists sessions from every linked machine and opens them as tabs you can type into, rather than as links out.
+- Let a signed-in browser start and stop sessions on a linked machine, after that machine agrees to it once at `shell login`. The browser chooses the session password and seals it to a key the machine publishes, so the service relays an envelope it cannot open.
+- Add session ownership, handoff history, comments, mentions, and notifications without copying terminal input into the accounts service.
+- Detect which coding-agent harnesses a machine can run, so the web app offers the ones that are actually there.
+- Add terms of service, accepted at sign-up.
+
+### Fixed
+
+- Scope remote-start consent to one account and accounts service, stop a stale
+  daemon when that identity changes, and make single-use invite claims atomic.
+- Remember which linked machine owns each session so Stop always targets that
+  machine, and preserve quoting in browser-started commands through the native
+  platform shell.
+- Restrict CLI OAuth callbacks to literal IPv4 or IPv6 loopback addresses, so
+  a local name-resolution override cannot receive an authorization code.
+- Keep production infrastructure identifiers out of tracked Wrangler config,
+  verify the pinned Cloud SQL proxy before execution, and compile the web app
+  against the public relay rather than a development address.
+- Point `shell login` at the deployment that serves it. The accounts address had never resolved, and the approval screen resolved to the marketing site, so either would have failed on the first release carrying the command.
+- Update `golang.org/x/crypto` to a patched release. The Windows binaries linked its SSH package, reached through the PTY library, and so carried thirteen advisories including seven rated critical. No shell.online code path called into it, and the other platforms never linked it at all.
+
 ## [0.8.1] — 2026-09-04
 
 ### Fixed

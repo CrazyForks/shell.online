@@ -14,17 +14,42 @@ import (
 	"syscall"
 	"time"
 
+	"shell.online/internal/account"
 	"shell.online/internal/api"
 	"shell.online/internal/e2ee"
 )
 
 var version = "dev"
 
+// wantsDaemonRunning reports whether this command should bring the daemon up.
+//
+// The commands that decide the daemon's own fate are excluded: login starts it
+// once it knows the answer, logout stops it, and daemon is it.
+func wantsDaemonRunning(arguments []string) bool {
+	if len(arguments) == 0 {
+		return false
+	}
+	switch arguments[0] {
+	case "daemon", "service", "login", "logout", "agent", "help", "--help", "-h", "--version":
+		return false
+	default:
+		return true
+	}
+}
+
 func main() {
 	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
 }
 
 func run(arguments []string, stdout, stderr io.Writer) int {
+	// A machine that agreed to remote starts should be reachable whenever its
+	// owner is using the tool, so any command is enough to bring the daemon
+	// back after a reboot. It costs a failed connect when there is nothing
+	// there, and does nothing at all unless someone has agreed to it.
+	if wantsDaemonRunning(arguments) {
+		ensureDaemon()
+	}
+
 	if exitCode, handled := runSessionCommand(arguments, stdout, stderr); handled {
 		return exitCode
 	}
@@ -202,6 +227,19 @@ func run(arguments []string, stdout, stderr io.Writer) int {
 		}()
 	}
 
+	// Publish to the linked account, if this machine has one. Nothing below is
+	// fatal: sharing a terminal must not depend on the accounts service.
+	link := openSessionLink(signalContext, stderr)
+	link.Register(signalContext, account.SessionInput{
+		ID:         session.ID,
+		ShareURL:   session.ShareURL,
+		Command:    displayCommand(launch.DisplayArguments),
+		ReadOnly:   session.ReadOnly,
+		Encrypted:  session.Encrypted,
+		Persistent: session.Persistent,
+		StartedAt:  processStartedAt.UnixMilli(),
+	})
+
 	if !isBackgroundChild() && *jsonOutput {
 		event := map[string]any{
 			"type":       "session",
@@ -258,6 +296,9 @@ func run(arguments []string, stdout, stderr io.Writer) int {
 		onStarted,
 		control,
 	)
+	// The share is over once the process is; mark it closed in the account.
+	link.Close(&exitCode)
+
 	if readyFile != nil {
 		startupError := fmt.Sprintf("task exited before its share became usable (exit code %d); no link was printed", exitCode)
 		var reportedExitCode *int
@@ -280,6 +321,9 @@ func run(arguments []string, stdout, stderr io.Writer) int {
 func defaultServer() string {
 	if configured := os.Getenv("SHELL_ONLINE_SERVER"); configured != "" {
 		return configured
+	}
+	if developingLocally() {
+		return localServerURL
 	}
 	return "https://shell.online"
 }

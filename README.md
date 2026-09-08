@@ -99,6 +99,108 @@ E2EE is automatic: the CLI encrypts terminal frames before Cloudflare relays the
 
 Read the [security model](https://shell.online/security/), [E2EE guide](https://shell.online/e2ee/), or [private vulnerability policy](SECURITY.md) before sharing sensitive work.
 
+## Your account
+
+Linking a machine to an account is optional. The CLI works exactly the same
+without it; linking adds a list of your shares on the web.
+
+```sh
+shell login                 # opens a browser to approve this machine
+shell login --no-browser    # prints the URL; open it on this same machine
+shell whoami                # show the linked account
+shell logout                # unlink and revoke this machine's token
+```
+
+Login uses the OAuth 2.0 authorization code flow with PKCE and a loopback
+redirect (RFC 8252). The browser hands a one-time code back to a listener bound
+to `127.0.0.1`, so the code never leaves the machine, and it is useless without
+a verifier that is never transmitted. The CLI receives a scoped token that can
+only publish sessions, and that you can revoke per machine.
+
+You link a machine, not a terminal. `shell login` records the account once,
+and every later `shell <command>` in any window publishes without further
+setup. Each share is published as it starts and marked closed when the process
+exits.
+
+What is published: the share URL, the command name, the host name, and the
+timing. Never the terminal contents, and never the browser password. The share
+URL keeps its `#salt=` fragment so the link can be opened from the web, which
+is safe because the salt is not the secret: without the eight-character
+password no key can be derived from it. A `#key=` fragment, which carries a
+raw key, is stripped instead.
+
+### Driving a machine from the browser
+
+`shell login` asks, once, whether your signed-in browser may start sessions on
+this machine:
+
+```
+  Start sessions from the browser?
+  Anyone signed in to you@example.com could start processes on this
+  machine, as you, without touching this terminal.
+  You can say no and still publish sessions with 'shell <command>'.
+
+  Allow it? [y/N]
+```
+
+It is asked rather than assumed because it is a real capability, and only a
+yes is remembered: saying no leaves the machine publish-only and the question
+is put again next time you sign in.
+
+Say yes and a small daemon runs in the background for as long as the machine
+stays signed in, so it is there in the web app whether or not a terminal is
+open. Any `shell` command starts it again if it is not running, which is how a
+machine comes back after a reboot.
+
+```sh
+shell daemon status              # is my browser able to start sessions here?
+shell daemon stop                # stop until the next shell command
+shell login --no-remote-start    # withdraw it on this machine
+shell logout                     # stop it and unlink the machine
+```
+
+That covers a reboot the moment you next use the tool. A machine that sits
+idle and still has to be reachable can install the daemon as a user service —
+a LaunchAgent on macOS, a systemd user unit on Linux:
+
+```sh
+shell service install
+```
+
+`shell agent` does the same work in the foreground, printing each session as
+it starts, for anyone who would rather watch it than have it run unattended.
+
+Commands entered in the web app use the platform's normal command language:
+`sh -c` on Unix and Windows PowerShell on Windows. Quoted and escaped arguments
+therefore behave the same way they do in a local terminal.
+
+The daemon generates an ephemeral key pair each run and publishes the public
+half. A browser starting a session picks the browser password itself and seals
+it to that key, so the accounts service relays an envelope it cannot open, and
+the browser can open the terminal without asking for a password nobody was
+shown. Stopping the daemon ends the ability to open anything sealed to it.
+
+Exactly one poller runs per machine, held by a lock the kernel releases even
+if the process is killed. Two would each publish their own key while queued
+work went to whichever asked first, so a session would come up on a password
+the browser that started it never had.
+
+### Running against a local stack
+
+Every address defaults to production, so setting only some of them leaves the
+rest pointed at the real service. One switch moves the whole set:
+
+```sh
+export SHELL_ONLINE_LOCAL=1     # accounts :8787, web :5173, relay :8788
+```
+
+`SHELL_ONLINE_ACCOUNTS`, `SHELL_ONLINE_WEB` and `SHELL_ONLINE_SERVER` still
+override individually, and `shell login` prints which services it is using
+whenever they are not the production ones.
+
+Credentials are stored in your user config directory, readable only by you.
+Set `SHELL_ONLINE_CONFIG` to move them.
+
 ## Agents
 
 Agents can create a share without interactive setup and return structured details to their operator:
@@ -147,6 +249,16 @@ go test -race ./...
 ```
 
 The Go CLI owns the local PTY. A Cloudflare Worker creates sessions and serves the site, while one Durable Object coordinates each terminal's host and viewers. The browser uses xterm.js.
+
+### The platform app
+
+[`app/`](app/) is the optional accounts and collaboration platform: `shell login`, organizations, and an in-app session manager. It does not gate the CLI or copy terminal input into the accounts service. It is a separate package with its own dependencies, so it is installed and tested on its own:
+
+```sh
+npm run test:app
+```
+
+It ships as one container serving the client, its API, and a proxy to the relay — they have to share an origin, because the relay refuses a websocket whose `Origin` is not its own. See [app/DEPLOYMENT.md](app/DEPLOYMENT.md).
 
 Bug reports and focused pull requests are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md), the [Code of Conduct](CODE_OF_CONDUCT.md), and the [changelog](CHANGELOG.md).
 

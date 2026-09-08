@@ -32,6 +32,13 @@ The guided flow
   6. Use shell kill <ID> to stop the process and close its link.
      A share also closes automatically when its task exits.
 
+Your account (optional)
+  shell login                      Link this machine so your shares appear in your account
+  shell login --no-browser         Print the sign-in URL instead of opening a browser
+  shell whoami                     Show which account this machine is linked to
+  shell logout                     Unlink this machine and revoke its token
+  shell daemon status              Say whether your browser can start sessions here
+
 Manage sessions
   shell list                       Show uptime, relay status, URL, and browser password
   shell list --json                Emit sessions and relay status as JSON
@@ -55,6 +62,7 @@ More guidance
   shell help attach
   shell help list
   shell help kill
+  shell help login
   shell help e2ee
   shell help docker
   shell help platforms
@@ -68,7 +76,7 @@ func runHelp(arguments []string, stdout, stderr io.Writer) int {
 		return 0
 	}
 	if len(arguments) != 1 {
-		fmt.Fprintln(stderr, "Usage: shell help [start|attach|list|kill|e2ee|docker|platforms|reference]")
+		fmt.Fprintln(stderr, "Usage: shell help [start|attach|list|kill|login|e2ee|docker|platforms|reference]")
 		return 2
 	}
 
@@ -120,6 +128,75 @@ Detaching does not stop the process or disable the browser link. While attached,
 the terminal title keeps the Ctrl-X D reminder visible. Ctrl-] is also supported as
 a legacy alternative. Ctrl-Z only suspends the local shell client; it does not detach.
 `)
+	case "login", "logout", "whoami", "account":
+		fmt.Fprint(stdout, `shell login
+
+Linking a machine to an account is optional. The CLI works exactly the same
+without it; linking only adds a list of your shares at shell.online.
+
+  1. Run shell login. A browser opens on the approval screen.
+     shell login --no-browser prints the URL instead, but you must open it in
+     a browser on this same machine: the callback is deliberately loopback-only.
+  2. Approve the request. The browser hands a one-time code back to a listener
+     bound to 127.0.0.1, so the code never leaves this computer.
+  3. Run shell as usual. Each share is published to your account as it starts,
+     and marked closed when the process exits.
+
+What is published
+  The share URL, the command name, the host name, and the timing. Never the
+  terminal contents, and never the E2EE key: it lives in the URL fragment,
+  which is stripped before the URL is sent.
+
+  shell whoami                     Show the linked account
+  shell logout                     Unlink this machine and revoke its token
+  shell daemon status              Say whether your browser can start sessions here
+  shell daemon stop                Stop accepting browser-started sessions now
+
+Driving this machine from the browser
+  shell login asks, once, whether your signed-in browser may start sessions on
+  this machine. Say yes and a small daemon runs in the background for as long
+  as you stay signed in, so the machine is there in the web app whether or not
+  a terminal is open. Say no and nothing runs: shell <command> still publishes
+  sessions to your account exactly as before.
+
+  It is asked rather than assumed because it is a real capability. While it is
+  allowed, anyone signed in to your account can launch processes here, as you,
+  without touching this terminal.
+
+    shell login --allow-remote-start   Agree without being asked
+    shell login --no-remote-start      Withdraw it on this machine
+    shell daemon stop                  Stop until the next shell command
+    shell logout                       Stop it and unlink the machine
+
+  The daemon starts again whenever you run a shell command, which covers a
+  reboot the moment you use the tool. For a machine that sits idle and still
+  has to be reachable, install it as a background service:
+
+    shell service install              Keep it running across restarts
+    shell service uninstall            Remove it
+    shell service status               Say whether it is installed
+
+  shell agent does the same thing in the foreground, printing each session as
+  it starts, for anyone who would rather watch it than have it run unattended.
+
+Running against a local stack
+  Every address defaults to production, so setting only some of them aims the
+  rest at the real service. SHELL_ONLINE_LOCAL=1 points the whole set at a
+  local stack at once:
+
+    accounts  http://127.0.0.1:8787
+    web       http://localhost:5173
+    relay     http://127.0.0.1:8788
+
+  SHELL_ONLINE_ACCOUNTS, SHELL_ONLINE_WEB and SHELL_ONLINE_SERVER still
+  override individually. shell login prints which services it is using
+  whenever they are not the production ones.
+
+Credentials live in your user config directory, readable only by you. Set
+SHELL_ONLINE_CONFIG to keep them somewhere else.
+`)
+		return 0
+
 	case "list", "ps":
 		fmt.Fprint(stdout, `List active sessions
 

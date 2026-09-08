@@ -1,0 +1,51 @@
+{
+  "name": "shell-online-app",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "build": "tsc -b && vite build && npm run build:server",
+    "build:server": "esbuild server/index.ts --bundle --platform=node --target=node22 --format=esm --packages=external --outfile=dist-server/index.js && cp -R server/lib/migrations dist-server/migrations",
+    "check:protocol": "node scripts/check-protocol.mjs",
+    "db:import": "tsx server/import-json.ts",
+    "db:migrate": "tsx server/migrate.ts",
+    "db:up": "docker run -d --name shell-online-pg -e POSTGRES_PASSWORD=dev -e POSTGRES_DB=shell_online -p 5433:5432 postgres:16-alpine",
+    "dev": "vite",
+    "dev:accounts": "tsx watch --env-file-if-exists=.env.local server/index.ts",
+    "dev:all": "npm-run-all --parallel dev dev:accounts",
+    "lint": "oxlint",
+    "preview": "vite preview",
+    "render:deploy-config": "node scripts/render-deploy-config.mjs",
+    "start": "node dist-server/index.js",
+    "test": "vitest run && node scripts/check-protocol.mjs",
+    "test:pg": "TEST_DATABASE_URL=${TEST_DATABASE_URL:-postgres://postgres:dev@localhost:5433/shell_online} vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc -b --force"
+  },
+  "dependencies": {
+    "@phosphor-icons/react": "^2.1.10",
+    "@xterm/addon-fit": "^0.11.0",
+    "@xterm/xterm": "^6.0.0",
+    "firebase": "^12.18.0",
+    "jose": "^6.2.12",
+    "pg": "^8.23.0",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8",
+    "react-router-dom": "^7.18.3"
+  },
+  "devDependencies": {
+    "@types/node": "^24.13.3",
+    "@types/pg": "^8.23.1",
+    "@types/react": "^19.2.18",
+    "@types/react-dom": "^19.2.4",
+    "@vitejs/plugin-react": "^6.1.0",
+    "@vitest/coverage-v8": "^5.0.0",
+    "esbuild": "^0.28.2",
+    "npm-run-all": "^4.1.5",
+    "oxlint": "^1.79.0",
+    "tsx": "^4.23.13",
+    "typescript": "~6.0.2",
+    "vite": "^8.2.2",
+    "vitest": "^5.0.0"
+  }
+}
