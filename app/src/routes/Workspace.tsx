@@ -1,22 +1,26 @@
 import { useCallback, useEffect, useReducer, useRef, useState } from "react";
-import { Copy, Check, X, Terminal as TerminalIcon, List, Plus, CaretRight } from "@phosphor-icons/react";
+import { X, Trash, Terminal as TerminalIcon, List, Plus, CaretRight, MagnifyingGlass, Rows, Columns } from "@phosphor-icons/react";
 import { Link, useSearchParams } from "react-router-dom";
 import { PersonChip } from "../components/Avatar";
 import { PersonPicker } from "../components/PersonPicker";
 import { findPerson } from "../lib/people";
 import { kindForCommand } from "../lib/session-kinds";
+import { canEdit, canHandOff, canRemove, canStop, matches } from "../lib/session-view";
 import { NewSessionModal } from "../components/NewSessionModal";
+import { SessionBoard } from "../components/SessionBoard";
+import { SessionClipboard } from "../components/SessionClipboard";
 import { SignedInModal } from "../components/SignedInModal";
 import { AppShell } from "../components/AppShell";
 import { Alert } from "../components/Alert";
 import { TerminalPane } from "../terminal/TerminalPane";
 import { EMPTY, reduce } from "../terminal/tabs";
 import {
+  assignSession,
+  deleteSession,
   fetchDevices,
   fetchSessions,
   startSession,
   stopSession,
-  assignSession,
   type Device,
   type Member,
   type SessionRecord,
@@ -24,8 +28,9 @@ import {
 import { generatePassword, sealPassword } from "../lib/seal";
 import { publicKey, sealForMembers } from "../lib/keypair";
 import { fetchOrg, shareSessionKeys } from "../lib/api";
-import { adoptOrigin, passwordFor, rememberFor, rememberForOrigin } from "../lib/session-passwords";
+import { adoptOrigin, forget, passwordFor, rememberFor, rememberForOrigin } from "../lib/session-passwords";
 import { elapsed } from "../lib/time";
+import { usePageTitle } from "../lib/page-title";
 import { wasJustLinked, withoutLinkedFlag } from "../lib/linked";
 
 const POLL_MS = 4000;
@@ -34,30 +39,80 @@ const DEVICE_POLL_MS = 5000;
 /* Long enough for the agent to poll, launch, and for the session to publish. */
 const AFTER_COMMAND_MS = 1500;
 
-function CopyLink({ url }: { url: string }) {
-  const [copied, setCopied] = useState(false);
+/*
+ * Removes a session from the lists. Asks first, because it cannot be undone
+ * and the row is the only place the session appears.
+ *
+ * It does not touch the machine. Whatever the session wrote is still there,
+ * and the audit trail keeps the record of the removal.
+ */
+function RemoveSession({
+  session,
+  onRemove,
+  busy,
+}: {
+  session: SessionRecord;
+  onRemove: (session: SessionRecord) => void;
+  busy: boolean;
+}) {
+  const [confirming, setConfirming] = useState(false);
+
+  useEffect(() => {
+    if (!confirming) return;
+    const timer = window.setTimeout(() => setConfirming(false), 4000);
+    return () => window.clearTimeout(timer);
+  }, [confirming]);
+
+  if (confirming) {
+    return (
+      <button
+        type="button"
+        className="session-action is-destructive"
+        onClick={() => onRemove(session)}
+        disabled={busy}
+      >
+        {busy ? "Removing" : "Remove?"}
+      </button>
+    );
+  }
+
   return (
     <button
       type="button"
       className="session-copy"
-      onClick={async () => {
-        try {
-          await navigator.clipboard.writeText(url);
-          setCopied(true);
-          window.setTimeout(() => setCopied(false), 1600);
-        } catch {
-          /* clipboard is unavailable outside a secure context */
-        }
-      }}
-      aria-label={copied ? "Link copied" : "Copy share link"}
-      title="Copy the share link"
+      onClick={() => setConfirming(true)}
+      disabled={busy}
+      aria-label={`Remove ${session.name || session.command} from the list`}
+      title="Remove from the list. The machine is not touched."
     >
-      {copied ? <Check size={15} weight="bold" /> : <Copy size={15} />}
+      <Trash size={15} />
     </button>
   );
 }
 
+type ViewMode = "list" | "board";
+
+const VIEW_KEY = "shell.online:sessions:view";
+
+/* Remembered per browser. Which shape suits you is not worth re-choosing. */
+function readViewMode(): ViewMode {
+  try {
+    return window.localStorage.getItem(VIEW_KEY) === "board" ? "board" : "list";
+  } catch {
+    return "list";
+  }
+}
+
+function writeViewMode(mode: ViewMode): void {
+  try {
+    window.localStorage.setItem(VIEW_KEY, mode);
+  } catch {
+    /* a private window simply forgets the choice */
+  }
+}
+
 export function Workspace() {
+  usePageTitle("Sessions");
   const [state, dispatch] = useReducer(reduce, EMPTY);
   const [sessions, setSessions] = useState<SessionRecord[] | null>(null);
   const [devices, setDevices] = useState<Device[]>([]);
@@ -66,6 +121,9 @@ export function Workspace() {
   const [now, setNow] = useState(() => Date.now());
   const [composing, setComposing] = useState(false);
   const [killing, setKilling] = useState("");
+  const [query, setQuery] = useState("");
+  const [view, setView] = useState<ViewMode>(readViewMode);
+  const [removing, setRemoving] = useState("");
   const [members, setMembers] = useState<Member[]>([]);
   const [you, setYou] = useState<Member | null>(null);
   /*
@@ -197,11 +255,33 @@ export function Workspace() {
   }
 
   /*
+   * Removes the row, not the session's leavings on the machine that ran it.
+   * The list is reloaded from the service rather than filtered here, so what
+   * is on screen is what the service has.
+   */
+  async function handleRemove(session: SessionRecord) {
+    setRemoving(session.id);
+    setError("");
+    setNotice("");
+    try {
+      await deleteSession(session.id);
+      forget(session.id);
+      dispatch({ type: "close", id: session.id });
+      setNotice(`Removed ${session.name || session.command} from the list.`);
+      await load();
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Could not remove that session.");
+    } finally {
+      setRemoving("");
+    }
+  }
+
+  /*
    * Sessions started here have a password only this browser knows. Seal it to
    * every colleague so they can read the session too.
    *
    * Runs on each poll rather than once, because someone can join the
-   * organization after a session started, and should still be able to open it.
+   * team after a session started, and should still be able to open it.
    */
   async function shareAnyPending(all: SessionRecord[], roster: Member[], me: Member | null) {
     const targets = roster.filter((member) => member.publicKey);
@@ -259,8 +339,18 @@ export function Workspace() {
     }
   }
 
-  const live = sessions?.filter((session) => !session.closedAt) ?? [];
-  const finished = sessions?.filter((session) => session.closedAt) ?? [];
+  /*
+   * Three groups, not two. Whether a session can be typed into is what
+   * somebody scanning this list is deciding between, and it was buried in the
+   * row: "Running" mixed sessions you can drive with sessions you can only
+   * watch, and the difference showed only once a tab was open.
+   */
+  const matching = (sessions ?? []).filter((session) => matches(session, query));
+  const liveWrite = matching.filter((session) => !session.closedAt && canEdit(session, you));
+  const liveRead = matching.filter((session) => !session.closedAt && !canEdit(session, you));
+  const finished = matching.filter((session) => session.closedAt);
+  const openSession = (session: SessionRecord) =>
+    dispatch({ type: "open", session, canType: canEdit(session, you) });
   const showingList = state.activeId === null;
 
   return (
@@ -296,7 +386,17 @@ export function Workspace() {
                 onClick={() => dispatch({ type: "select", id: tab.id })}
                 title={tab.command}
               >
-                <TerminalIcon size={15} />
+                {/*
+                  The kind of thing running, as the row shows it. This was a
+                  fixed terminal glyph, so opening a Claude Code session and
+                  looking at its tab showed a terminal whatever was running.
+                */}
+                <img
+                  className="tab-icon"
+                  src={kindForCommand(tab.command).icon}
+                  alt=""
+                  title={kindForCommand(tab.command).title}
+                />
                 {tab.label}
               </button>
               <button
@@ -385,37 +485,116 @@ export function Workspace() {
           </div>
         ) : (
           <>
-            {live.length > 0 && (
-              <SessionGroup
-                heading="Running"
-                sessions={live}
+            <div className="sessions-toolbar">
+              <label className="sessions-search">
+                <MagnifyingGlass size={15} />
+                <input
+                  type="search"
+                  value={query}
+                  onChange={(event) => setQuery(event.target.value)}
+                  placeholder="Search name or command"
+                  aria-label="Search sessions by name or command"
+                />
+              </label>
+
+              <div className="view-toggle" role="group" aria-label="How to show sessions">
+                <button
+                  type="button"
+                  className={view === "list" ? "view-option is-active" : "view-option"}
+                  aria-pressed={view === "list"}
+                  onClick={() => {
+                    setView("list");
+                    writeViewMode("list");
+                  }}
+                  title="List"
+                >
+                  <Rows size={15} />
+                </button>
+                <button
+                  type="button"
+                  className={view === "board" ? "view-option is-active" : "view-option"}
+                  aria-pressed={view === "board"}
+                  onClick={() => {
+                    setView("board");
+                    writeViewMode("board");
+                  }}
+                  title="Columns"
+                >
+                  <Columns size={15} />
+                </button>
+              </div>
+            </div>
+
+            {matching.length === 0 ? (
+              <div className="sessions-empty">
+                <p>Nothing matches that search.</p>
+                <button type="button" className="session-action" onClick={() => setQuery("")}>
+                  Clear it
+                </button>
+              </div>
+            ) : view === "board" ? (
+              <SessionBoard
+                liveWrite={liveWrite}
+                liveRead={liveRead}
+                finished={finished}
                 now={now}
-                live
-                killing={killing}
                 members={members}
                 you={you}
-                onOpen={(session) =>
-                  dispatch({ type: "open", session, canType: canEdit(session, you) })
-                }
-                onKill={handleKill}
-                onAssign={handleAssign}
+                removing={removing}
+                onOpen={openSession}
+                onRemove={handleRemove}
               />
-            )}
-            {finished.length > 0 && (
-              <SessionGroup
-                heading="Finished"
-                sessions={finished}
-                now={now}
-                live={false}
-                killing={killing}
-                members={members}
-                you={you}
-                onOpen={(session) =>
-                  dispatch({ type: "open", session, canType: canEdit(session, you) })
-                }
-                onKill={handleKill}
-                onAssign={handleAssign}
-              />
+            ) : (
+              <>
+                {liveWrite.length > 0 && (
+                  <SessionGroup
+                    heading="Live write"
+                    sessions={liveWrite}
+                    now={now}
+                    live
+                    killing={killing}
+                    removing={removing}
+                    members={members}
+                    you={you}
+                    onOpen={openSession}
+                    onKill={handleKill}
+                    onRemove={handleRemove}
+                    onAssign={handleAssign}
+                  />
+                )}
+                {liveRead.length > 0 && (
+                  <SessionGroup
+                    heading="Live read"
+                    sessions={liveRead}
+                    now={now}
+                    live
+                    killing={killing}
+                    removing={removing}
+                    members={members}
+                    you={you}
+                    onOpen={openSession}
+                    onKill={handleKill}
+                    onRemove={handleRemove}
+                    onAssign={handleAssign}
+                  />
+                )}
+                {finished.length > 0 && (
+                  <SessionGroup
+                    heading="Finished"
+                    sessions={finished}
+                    now={now}
+                    live={false}
+                    killing={killing}
+                    removing={removing}
+                    members={members}
+                    you={you}
+                    onOpen={openSession}
+                    onKill={handleKill}
+                    onRemove={handleRemove}
+                    onAssign={handleAssign}
+                  />
+                )}
+              </>
             )}
           </>
         )}
@@ -434,36 +613,18 @@ export function Workspace() {
   );
 }
 
-/**
- * Everyone in the organization can watch a session. Typing into it belongs to
- * the person who started it and the person it is assigned to.
- */
-export function canEdit(session: SessionRecord, you: Member | null): boolean {
-  if (!you) return false;
-  if (session.readOnly) return false;
-  return session.ownerUid === you.uid || session.assigneeUid === you.uid;
-}
-
-function canHandOff(session: SessionRecord, you: Member | null): boolean {
-  if (!you) return false;
-  return session.ownerUid === you.uid || you.role === "owner" || you.role === "admin";
-}
-
-/** Stopping controls the owner's local process, so assignment is not enough. */
-export function canStop(session: SessionRecord, you: Member | null): boolean {
-  return Boolean(you && session.ownerUid === you.uid && session.deviceId);
-}
-
 function SessionGroup({
   heading,
   sessions,
   now,
   live,
   killing,
+  removing,
   members,
   you,
   onOpen,
   onKill,
+  onRemove,
   onAssign,
 }: {
   heading: string;
@@ -471,10 +632,12 @@ function SessionGroup({
   now: number;
   live: boolean;
   killing: string;
+  removing: string;
   members: Member[];
   you: Member | null;
   onOpen: (session: SessionRecord) => void;
   onKill: (session: SessionRecord) => void;
+  onRemove: (session: SessionRecord) => void;
   onAssign: (session: SessionRecord, uid: string) => void;
 }) {
   /*
@@ -583,7 +746,7 @@ function SessionGroup({
                           <TerminalIcon size={15} weight="bold" />
                           {canEdit(session, you) ? "Open" : "Watch"}
                         </button>
-                        <CopyLink url={session.shareUrl} />
+                        <SessionClipboard session={session} you={you} />
                         {canStop(session, you) && (
                           <button
                             type="button"
@@ -594,9 +757,17 @@ function SessionGroup({
                             {killing === session.id ? "Stopping" : "Stop"}
                           </button>
                         )}
+                        {canRemove(session, you) && (
+                          <RemoveSession session={session} onRemove={onRemove} busy={removing === session.id} />
+                        )}
                       </>
                     ) : (
-                      <CopyLink url={session.shareUrl} />
+                      <>
+                        <SessionClipboard session={session} you={you} />
+                        {canRemove(session, you) && (
+                          <RemoveSession session={session} onRemove={onRemove} busy={removing === session.id} />
+                        )}
+                      </>
                     )}
                   </div>
                 </td>

@@ -322,6 +322,28 @@ for (const implementation of implementations) {
         expect(await store.deviceForMachine("uid-1", "")).toBeNull();
       });
 
+      /*
+       * Unlinking revokes the row rather than deleting it, and a session
+       * started before that still names it. Following the machine back is the
+       * only route from a dead device to the one carrying its work now, so
+       * this lookup deliberately ignores revoked_at.
+       */
+      it("still names the machine a revoked device belonged to", async () => {
+        await store.putToken(token({ machineId: "machine-a" }));
+        await store.revokeDevice("uid-1", "dev_1", 4000);
+        expect(await store.machineForDevice("uid-1", "dev_1")).toBe("machine-a");
+      });
+
+      it("has no machine for a device that never named one", async () => {
+        await store.putToken(token({ machineId: undefined }));
+        expect(await store.machineForDevice("uid-1", "dev_1")).toBeNull();
+      });
+
+      it("never reads another account's device", async () => {
+        await store.putToken(token({ machineId: "machine-a" }));
+        expect(await store.machineForDevice("uid-2", "dev_1")).toBeNull();
+      });
+
       it("never crosses accounts, however the machine id was learned", async () => {
         await store.putToken(token({ machineId: "machine-a" }));
         expect(await store.deviceForMachine("uid-2", "machine-a")).toBeNull();
@@ -385,6 +407,30 @@ for (const implementation of implementations) {
         expect(shares).toHaveLength(2);
         expect(shares.find((share) => share.uid === "uid-2")?.sealed).toBe("rotated");
         expect(shares.find((share) => share.uid === "uid-1")?.sealed).toBe("one");
+      });
+
+      it("removes a session's row and reports whether there was one", async () => {
+        await store.upsertSession(session());
+        expect(await store.deleteSession("org_1", "s1")).toBe(true);
+        expect(await store.sessionInOrg("org_1", "s1")).toBeNull();
+        expect(await store.deleteSession("org_1", "s1")).toBe(false);
+      });
+
+      it("refuses to delete another organization's session", async () => {
+        await store.upsertSession(session());
+        expect(await store.deleteSession("org_2", "s1")).toBe(false);
+        expect(await store.sessionInOrg("org_1", "s1")).not.toBeNull();
+      });
+
+      /*
+       * Removing a session is itself an audited act. A trail that vanished
+       * with its subject would record nothing worth keeping.
+       */
+      it("keeps the audit trail of a session it deleted", async () => {
+        await store.upsertSession(session());
+        await store.putAudit(auditEvent({ id: "gone", kind: "deleted", text: "htop" }));
+        await store.deleteSession("org_1", "s1");
+        expect((await store.auditFor("org_1", "s1")).map((entry) => entry.id)).toEqual(["gone"]);
       });
 
       it("says so when the session is not in the organization", async () => {

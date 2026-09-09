@@ -555,6 +555,15 @@ export class PostgresStore implements Store {
     return row ? toToken(row) : null;
   }
 
+  async machineForDevice(uid: string, deviceId: string): Promise<string | null> {
+    /* No revoked_at filter: the point is to find where a dead device lived. */
+    const row = await this.row("SELECT machine_id FROM cli_tokens WHERE uid = $1 AND id = $2", [
+      uid,
+      deviceId,
+    ]);
+    return (row?.machine_id as string | null) ?? null;
+  }
+
   async setMemberKey(uid: string, publicKey: string): Promise<void> {
     await this.pool.query("UPDATE memberships SET public_key = $2 WHERE uid = $1", [uid, publicKey]);
   }
@@ -762,6 +771,19 @@ export class PostgresStore implements Store {
       [orgId, id, assigneeUid],
     );
     return row ? (await this.hydrate([row]))[0] : null;
+  }
+
+  /*
+   * The row only. Sealed password copies go with it because they are useless
+   * without it, and the audit trail deliberately does not: removing a session
+   * is an audited act and the record of it outlives the subject.
+   */
+  async deleteSession(orgId: string, id: string): Promise<boolean> {
+    const result = await this.pool.query("DELETE FROM sessions WHERE org_id = $1 AND id = $2", [
+      orgId,
+      id,
+    ]);
+    return (result.rowCount ?? 0) > 0;
   }
 
   /** Stores sealed copies of a session password, replacing any for the same uid. */

@@ -43,6 +43,16 @@ export interface Store {
    * a machine id learned elsewhere can never select another account's device.
    */
   deviceForMachine(uid: string, machineId: string): Promise<CliToken | null>;
+  /**
+   * The machine a device belonged to, including a device that has been
+   * revoked.
+   *
+   * Unlinking a machine revokes its device row and signing in again makes a
+   * new one, deliberately, so that unlinking survives the next login. A
+   * session started before that still names the old row, and the only way
+   * back to the machine still running it is the machine id they share.
+   */
+  machineForDevice(uid: string, deviceId: string): Promise<string | null>;
   setMemberKey(uid: string, publicKey: string): Promise<void>;
   /**
    * Records a poll. `harnesses` left undefined keeps whatever the machine
@@ -65,6 +75,14 @@ export interface Store {
   listOrgSessions(orgId: string): Promise<SessionRecord[]>;
   sessionInOrg(orgId: string, id: string): Promise<SessionRecord | null>;
   assignSession(orgId: string, id: string, assigneeUid: string): Promise<SessionRecord | null>;
+  /**
+   * Removes a session's record from an organization.
+   *
+   * The row only. Whatever the session left on the machine that ran it is not
+   * ours to touch, and the process is already gone by the time anyone can ask
+   * for this.
+   */
+  deleteSession(orgId: string, id: string): Promise<boolean>;
   putKeyShares(orgId: string, sessionId: string, shares: SessionKeyShare[]): Promise<boolean>;
 
   /* ---- Agent commands ---- */

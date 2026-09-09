@@ -186,6 +186,51 @@ function bearer(request: IncomingMessage): string {
   return header.startsWith("Bearer ") ? header.slice(7).trim() : "";
 }
 
+/*
+ * Records that a session was stopped or removed, and does not let a failure
+ * to record it stop the thing being recorded.
+ *
+ * The set of kinds lives in the database as a check constraint as well as in
+ * this code, and the two can be out of step: a deployment that runs before its
+ * migration rejects the write. An operator stopping a runaway process should
+ * not be told "internal error" because the trail could not be written, which
+ * is exactly what happened when these two kinds were added ahead of the
+ * migration that allows them.
+ *
+ * Loud in the log, because a missing audit entry is a real gap and nobody
+ * should have to notice it by its absence.
+ */
+async function noteSessionEvent(
+  store: Store,
+  membership: Membership,
+  sessionId: string,
+  kind: "stopped" | "deleted",
+  session: { name?: string; command: string },
+): Promise<void> {
+  try {
+    await recordAudit(store, membership, {
+      sessionId,
+      kind,
+      text: session.name?.trim() || session.command,
+    });
+  } catch (error) {
+    /*
+     * Specifiers rather than interpolation. console.error treats its first
+     * argument as a format string, so a value carrying a "%s" would consume
+     * the error argument and print itself instead. Neither value can do that
+     * today -- kind is one of two literals, and a session id has matched
+     * /^[A-Za-z0-9_-]{6,64}$/ to exist at all -- but that is an argument from
+     * validation two files away, and this form does not need it.
+     */
+    console.error(
+      "accounts: could not record %s for session %s",
+      kind,
+      sessionId,
+      error instanceof Error ? error.message : error,
+    );
+  }
+}
+
 export function createApp(options: AppOptions) {
   const { store, verifyIdToken, allowedOrigins } = options;
   const trustProxy = options.trustProxy ?? false;
@@ -474,6 +519,21 @@ export function createApp(options: AppOptions) {
         return send(response, 200, { written: written.length });
       }
 
+      /*
+       * The whole team's trail, which is what the page needs.
+       *
+       * Reading it session by session cannot show what happened to a session
+       * that no longer exists, and the entry recording its removal is exactly
+       * the one somebody comes here to find.
+       */
+      if (route === "GET /api/audit") {
+        const membership = await requireMember(request);
+        if (!membership) return send(response, 401, { error: "sign in first" });
+        const asked = Number(url.searchParams.get("limit") ?? "");
+        const limit = Number.isFinite(asked) && asked > 0 ? Math.min(asked, 5000) : 2000;
+        return send(response, 200, { events: await store.auditForOrg(membership.orgId, limit) });
+      }
+
       const auditRoute = url.pathname.match(/^\/api\/audit\/([A-Za-z0-9_-]{6,64})$/);
       if (request.method === "GET" && auditRoute) {
         const membership = await requireMember(request);
@@ -535,6 +595,35 @@ export function createApp(options: AppOptions) {
           );
         }
         return send(response, 201, { session: sessionForApi(result.session) });
+      }
+
+      /*
+       * Removes a session from the lists without touching the machine that
+       * ran it. The process has already exited, or is being abandoned on
+       * purpose; either way what it left on disk is not ours to delete. This
+       * is the record going away, and the audit entry is what remains of it.
+       */
+      const deleteMatch = url.pathname.match(/^\/api\/sessions\/([A-Za-z0-9_-]{6,64})$/);
+      if (request.method === "DELETE" && deleteMatch) {
+        const membership = await requireMember(request);
+        if (!membership) return send(response, 401, { error: "sign in first" });
+        const sessionId = deleteMatch[1];
+        const session = await store.sessionInOrg(membership.orgId, sessionId);
+        if (!session) return send(response, 404, { error: "no such session" });
+
+        /* The person whose machine ran it, or somebody who runs the team. */
+        const isOwner = (session.ownerUid ?? session.uid) === membership.uid;
+        const isAdmin = membership.role === "owner" || membership.role === "admin";
+        if (!isOwner && !isAdmin) {
+          return send(response, 403, { error: "only the session's owner can remove it" });
+        }
+
+        /* Written first: after the row is gone there is nothing to attach to. */
+        await noteSessionEvent(store, membership, sessionId, "deleted", session);
+        if (!(await store.deleteSession(membership.orgId, sessionId))) {
+          return send(response, 404, { error: "no such session" });
+        }
+        return send(response, 200, { deleted: true });
       }
 
       const closeMatch = url.pathname.match(/^\/api\/sessions\/([A-Za-z0-9_-]{6,64})$/);
@@ -662,23 +751,32 @@ export function createApp(options: AppOptions) {
         const deviceId = String(body.device_id ?? "");
         const kind = String(body.kind ?? "");
 
-        const device = (await store.listDevices(identity.uid)).find((entry) => entry.id === deviceId);
-        if (!device) return send(response, 404, { error: "no such machine" });
-
-        /*
-         * Only a machine that is polling can carry work out. Queuing for one
-         * that is not would sit there silently forever, which is a worse
-         * answer than saying so now.
-         */
-        if (!device.agentSeenAt || Date.now() - device.agentSeenAt > AGENT_ONLINE_MS) {
-          return send(response, 409, {
-            error:
-              `${device.label} is not reachable. Sign in there with 'shell login' ` +
-              `and allow browser-started sessions, then try again.`,
-          });
-        }
-
         if (kind === "start") {
+          /*
+           * Starting names a machine, so the caller's choice is the subject
+           * and checking it here is right. Stopping does not: it names a
+           * session, and which machine that reaches is the session's business,
+           * resolved in that branch. Checking the caller's copy for both is
+           * what made stopping fail with "no such machine".
+           */
+          const device = (await store.listDevices(identity.uid)).find(
+            (entry) => entry.id === deviceId,
+          );
+          if (!device) return send(response, 404, { error: "no such machine" });
+
+          /*
+           * Only a machine that is polling can carry work out. Queuing for one
+           * that is not would sit there silently forever, which is a worse
+           * answer than saying so now.
+           */
+          if (!device.agentSeenAt || Date.now() - device.agentSeenAt > AGENT_ONLINE_MS) {
+            return send(response, 409, {
+              error:
+                `${device.label} is not reachable. Sign in there with 'shell login' ` +
+                `and allow browser-started sessions, then try again.`,
+            });
+          }
+
           const command = String(body.command ?? "").trim();
           if (!command) return send(response, 400, { error: "give a command to run" });
           if (command.length > 500) return send(response, 400, { error: "that command is too long" });
@@ -714,19 +812,62 @@ export function createApp(options: AppOptions) {
           if ((session.ownerUid ?? session.uid) !== identity.uid) {
             return send(response, 403, { error: "only the session owner can stop its process" });
           }
-          const ownerDeviceId = sessionSource(session).deviceId;
-          if (!ownerDeviceId) {
+          /*
+           * Recorded before the machine is asked, not after. The queue is the
+           * decision; whether the process was still alive to receive it is a
+           * fact about the machine, and an organization asking who stopped
+           * this wants the person who pressed it either way.
+           */
+          if (scope) await noteSessionEvent(store, scope, sessionId, "stopped", session);
+
+          /*
+           * The target comes from the session, not from the caller.
+           *
+           * The browser echoes back the device id the session was started on,
+           * and that id goes stale in a way nobody would connect to the button
+           * they pressed: unlinking a machine revokes its device row, signing
+           * in again deliberately makes a new one, and every session started
+           * before that still names the old row. Validating the caller's copy
+           * answered "no such machine" about a machine that was sitting there
+           * polling under a new id.
+           *
+           * So the recorded device is preferred while it is live, and
+           * otherwise the machine it belonged to is followed to whichever
+           * device is carrying it now.
+           */
+          const recorded = sessionSource(session).deviceId;
+          if (!recorded) {
             return send(response, 409, {
               error: "this older session has no machine identity; stop it from that machine",
             });
           }
-          if (ownerDeviceId !== deviceId) {
-            return send(response, 409, { error: "that session is running on a different machine" });
+
+          const live = await store.listDevices(identity.uid);
+          let target = live.find((entry) => entry.id === recorded);
+          if (!target) {
+            const machine = await store.machineForDevice(identity.uid, recorded);
+            const current = machine ? await store.deviceForMachine(identity.uid, machine) : null;
+            target = current ? live.find((entry) => entry.id === current.id) : undefined;
           }
+          if (!target) {
+            return send(response, 409, {
+              error:
+                "the machine that started this session is no longer linked. " +
+                "Stop it there with 'shell kill', or sign that machine in again.",
+            });
+          }
+          if (!target.agentSeenAt || Date.now() - target.agentSeenAt > AGENT_ONLINE_MS) {
+            return send(response, 409, {
+              error:
+                `${target.label} is not reachable, so the stop cannot be delivered. ` +
+                `Sign in there with 'shell login' and allow browser-started sessions.`,
+            });
+          }
+
           const queued = {
             id: mintSecret("cmd"),
             uid: identity.uid,
-            deviceId,
+            deviceId: target.id,
             kind: "kill" as const,
             sessionId,
             createdAt: Date.now(),
@@ -759,6 +900,27 @@ export function createApp(options: AppOptions) {
         const error = typeof body.error === "string" && body.error ? body.error : undefined;
         const finished = await store.finishCommand(token.id, doneMatch[1], error);
         if (!finished) return send(response, 404, { error: "no such command" });
+
+        /*
+         * A stop that the machine carried out closes the session here too.
+         *
+         * A session normally reports its own exit, using the credentials it
+         * started with. Those are revoked when the machine is unlinked, so a
+         * session started before that can never report anything again: the
+         * process died on the machine and the row stayed open here, which
+         * reads as a stop button that did nothing.
+         *
+         * The machine confirming it carried out the kill is the same fact,
+         * arriving on credentials that are still valid.
+         */
+        if (!error) {
+          const command = (await store.listCommands(token.uid)).find(
+            (entry) => entry.id === doneMatch[1],
+          );
+          if (command?.kind === "kill" && command.sessionId) {
+            await closeSession(store, token.uid, command.sessionId, undefined);
+          }
+        }
         return send(response, 200, { ok: true });
       }
 

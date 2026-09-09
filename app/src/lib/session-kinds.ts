@@ -211,8 +211,38 @@ export function kindById(id: string): SessionKind | undefined {
  * and `npm run claude-thing` is not. Anything unrecognised is a terminal
  * process, which is what it is.
  */
+/*
+ * Sees through the shell a session was started under.
+ *
+ * A session started from the browser is handed to the machine as
+ * `sh -c "claude ..."`, so the program being run is the second thing on the
+ * line and reading the first gives every one of them a terminal icon. Quotes
+ * are stripped when present; an argv recorded by joining its parts with spaces
+ * no longer has them, so their absence is not a reason to give up.
+ *
+ * This is for sessions recorded before the CLI carried the requested command
+ * through to registration. A machine running a current release publishes what
+ * was asked for, so nothing new needs unwrapping; rows already stored do.
+ *
+ * Only the leading wrapper is unwrapped, and only once: `sh -c "sh -c ..."` is
+ * not a thing anything here produces, and following it would be guessing.
+ */
+export function unwrapShell(command: string): string {
+  const trimmed = command.trim();
+  const wrapper = trimmed.match(/^(?:\/\S*\/)?(?:ba|z|da)?sh\s+-[a-z]*c\s+([\s\S]+)$/);
+  if (!wrapper) return trimmed;
+  /*
+   * The wrapped line is one argument to sh, but an argv joined back together
+   * for display has lost the quotes that made it one. `sh -c claude` and
+   * `sh -c "claude --resume"` are the same shape with and without them.
+   */
+  const rest = wrapper[1].trim();
+  const quoted = rest.match(/^(['"])([\s\S]*)\1$/);
+  return (quoted ? quoted[2] : rest).trim();
+}
+
 export function kindForCommand(command: string): SessionKind {
-  const program = command.trim().split(/\s+/)[0]?.toLowerCase() ?? "";
+  const program = unwrapShell(command).split(/\s+/)[0]?.toLowerCase() ?? "";
   /* Strip any path, so /usr/local/bin/claude still reads as Claude Code. */
   const leaf = program.split(/[\\/]/).pop() ?? "";
   const byProgram: Record<string, string> = {
