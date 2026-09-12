@@ -4,6 +4,8 @@ All notable user-visible changes are recorded here. Versions follow [Semantic Ve
 
 ## Unreleased
 
+## [0.12.1] — 2026-09-12
+
 ### Added
 
 - Vault management on the Account page: what the vault is, the session
@@ -15,12 +17,20 @@ All notable user-visible changes are recorded here. Versions follow [Semantic Ve
 
 ### Changed
 
+- Give the accounts app a clear primary position in the landing-page header
+  and hero now that browser-started sessions are available.
 - Searching and exporting the audit log run in the browser, on the decrypted
   entries.
 - The service refuses unencrypted input entries for the audit log.
 
 ### Fixed
 
+- Accept `--auto-close today`, which the CLI reference documents but which
+  never worked: it meant midnight, so it had already passed whenever the
+  command ran. It now means the end of today.
+- Say that an unquoted `--auto-close` date has passed, instead of calling it
+  invalid. `--auto-close=2020-01-01` already said so; `--auto-close 2020-01-01`
+  reported a grammar error for a value it had understood perfectly well.
 - The sign-up page said typed input was not recorded. It is recorded, now
   end-to-end encrypted for your team.
 
