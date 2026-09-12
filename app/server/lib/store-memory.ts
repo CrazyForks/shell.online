@@ -252,6 +252,21 @@ export class MemoryStore implements Store {
     return true;
   }
 
+  async rotateSessionCredentials(
+    orgId: string,
+    sessionId: string,
+    ownerUid: string,
+    shareUrl: string,
+    shares: SessionKeyShare[],
+  ): Promise<SessionRecord | null> {
+    const session = await this.sessionInOrg(orgId, sessionId);
+    if (!session || (session.ownerUid ?? session.uid) !== ownerUid || !session.encrypted) return null;
+    session.shareUrl = shareUrl;
+    session.keyShares = [...shares];
+    this.flush();
+    return session;
+  }
+
   async accountKey(uid: string): Promise<AccountKey | null> {
     const found = this.data.accountKeys.find((entry) => entry.uid === uid);
     return found ? { ...found } : null;
@@ -573,6 +588,11 @@ export class MemoryStore implements Store {
       (entry) => !(entry.orgId === orgId && entry.uid === uid),
     );
     if (this.data.memberships.length === before) return false;
+    for (const session of this.data.sessions) {
+      if (session.orgId === orgId && session.keyShares) {
+        session.keyShares = session.keyShares.filter((share) => share.uid !== uid);
+      }
+    }
     this.flush();
     return true;
   }
@@ -745,16 +765,16 @@ export class MemoryStore implements Store {
     this.flush();
   }
 
-  async notificationsFor(uid: string, limit = 100): Promise<Notification[]> {
+  async notificationsFor(orgId: string, uid: string, limit = 100): Promise<Notification[]> {
     return this.data.notifications
-      .filter((entry) => entry.uid === uid)
+      .filter((entry) => entry.orgId === orgId && entry.uid === uid)
       .sort(byTime((entry) => entry.at, (entry) => entry.id, true))
       .slice(0, limit);
   }
 
-  async markNotificationRead(uid: string, id: string, now = Date.now()): Promise<boolean> {
+  async markNotificationRead(orgId: string, uid: string, id: string, now = Date.now()): Promise<boolean> {
     const notification = this.data.notifications.find(
-      (entry) => entry.id === id && entry.uid === uid,
+      (entry) => entry.orgId === orgId && entry.id === id && entry.uid === uid,
     );
     if (!notification || notification.readAt) return false;
     notification.readAt = now;
@@ -762,10 +782,10 @@ export class MemoryStore implements Store {
     return true;
   }
 
-  async markAllNotificationsRead(uid: string, now = Date.now()): Promise<number> {
+  async markAllNotificationsRead(orgId: string, uid: string, now = Date.now()): Promise<number> {
     let count = 0;
     for (const notification of this.data.notifications) {
-      if (notification.uid === uid && !notification.readAt) {
+      if (notification.orgId === orgId && notification.uid === uid && !notification.readAt) {
         notification.readAt = now;
         count += 1;
       }

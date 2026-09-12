@@ -104,7 +104,11 @@ check(application?.sameAs === "https://github.com/TeoSlayer/shell.online", "Sour
 check(application?.image === "https://shell.online/social-card.png", "Application image is missing from schema");
 check(application?.screenshot === "https://shell.online/screenshots/codex-working-mobile.png", "Application screenshot is missing from schema");
 check(landingSource.includes("Developed by"), "Visible Pilot Protocol attribution is missing");
-check(landingSource.includes("https://pilotprotocol.network/"), "Visible Pilot Protocol link is missing");
+check(
+  /const PILOT_PROTOCOL_URL = ["']https:\/\/pilotprotocol\.network\/["']/.test(landingSource) &&
+    landingSource.includes('href="${PILOT_PROTOCOL_URL}"'),
+  "Visible Pilot Protocol link is missing",
+);
 check(landingSource.includes("shell --read-only python train.py"), "Visible read-only example is missing");
 check(landingSource.includes("v${RELEASE_VERSION} · SHA-256"), "Visible release integrity link is missing");
 check(readme.includes("[Pilot Protocol](https://pilotprotocol.network/)"), "README Pilot Protocol link is missing");
@@ -126,13 +130,13 @@ for (const example of [
 
 check(sitemap.includes("<loc>https://shell.online/</loc>"), "Homepage is missing from sitemap");
 check(sitemap.includes("<lastmod>2026-09-02</lastmod>"), "Sitemap lastmod is missing");
-check((sitemap.match(/<loc>/gu) ?? []).length === 9, "Sitemap should list the homepage and knowledge base");
+check((sitemap.match(/<loc>/gu) ?? []).length === 10, "Sitemap should list the homepage and knowledge base");
 check(documentationHtml.includes("__DOC_DESCRIPTION__"), "Documentation description build token is missing");
 check(documentationHtml.includes("__DOC_SOCIAL_TITLE__"), "Documentation title build token is missing");
 check(documentationHtml.includes("__DOC_SOCIAL_DESCRIPTION__"), "Documentation social-description build token is missing");
 check(documentationHtml.includes("__DOC_PATH__"), "Documentation canonical-path build token is missing");
 check(documentationHtml.includes('<meta name="robots" content="index, follow'), "Documentation robots directive is invalid");
-for (const path of ["docs", "cli", "platforms", "mobile", "reliability", "security", "e2ee", "docker"]) {
+for (const path of ["docs", "cli", "platforms", "mobile", "reliability", "security", "e2ee", "docker", "self-hosting"]) {
   const seo = docsContent.pages?.[path]?.seo;
   check(typeof seo?.description === "string", `${path} SEO description is missing from versioned content`);
   check(typeof seo?.socialTitle === "string", `${path} social title is missing from versioned content`);
@@ -145,6 +149,8 @@ for (const guide of ["platforms", "mobile", "reliability", "security", "e2ee", "
 for (const guarantee of ["Any connected phone selects", "Paste input is split", "authenticated ciphertext", "e2ee_password", "docker compose up --build -d"]) {
   check(docsSource.includes(guarantee), `Versioned documentation guarantee is missing: ${guarantee}`);
 }
+check(docsSource.includes("terminal_size control messages"), "E2EE docs must disclose plaintext terminal-size control metadata");
+check(!docsSource.includes("snapshots, resizes, and latency probes are authenticated ciphertext"), "E2EE docs must not claim relay-controlled resizes are ciphertext");
 check(readme.includes("end-to-end encrypted by default"), "README default E2EE summary is missing");
 check(readme.includes("--no-e2ee"), "README explicit E2EE opt-out is missing");
 check(docsContent.version === packageMetadata.version, "Documentation version must match package version");

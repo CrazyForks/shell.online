@@ -12,6 +12,10 @@ import { createVault, sealToAccount } from "../src/lib/vault-crypto";
 const PROJECT = "test-firebase-project";
 const REDIRECT = "http://127.0.0.1:51234/callback";
 const ORIGIN = "http://localhost:5173";
+const P256_PUBLIC_KEY_A = "BDxrse1_E7EAHDreFfDYFkHs7kcn3d2n_BqKorrlu6H-9FarvjSDUCUSY3EOYKRBJusTV2E2GwRZLdplZc3UbQY";
+const P256_PUBLIC_KEY_B = "BM4rJdocNKu-sk24tVjh1QKxfdLJN43q2NVO3NElj_H09ORvqFD6ZcX7xJ_DTef8pYUGo0AJz9bnFV8oxvkBElc";
+const SESSION_SHARE_A = base64url(Buffer.alloc(40, 0x41));
+const SESSION_SHARE_B = base64url(Buffer.alloc(40, 0x42));
 
 let privateKey: KeyObject;
 let verifyIdToken: (token: string) => Promise<{ ok: boolean }>;
@@ -21,7 +25,7 @@ let verifier: string;
 
 /* Signs a token that looks exactly like a Firebase ID token, minus Google. */
 async function idToken(overrides: Record<string, unknown> = {}) {
-  return new SignJWT({ email: "ana@example.com", name: "Ana Ferreira", ...overrides })
+  return new SignJWT({ email: "ana@example.com", name: "Ana Ferreira", email_verified: true, ...overrides })
     .setProtectedHeader({ alg: "RS256", kid: "test-key" })
     .setIssuer(String(overrides.iss ?? `https://securetoken.google.com/${PROJECT}`))
     .setAudience(String(overrides.aud ?? PROJECT))
@@ -867,16 +871,27 @@ describe("relaying a sealed password", () => {
 
   it("records the agent's published key so a browser can seal to it", async () => {
     const tokens = await login();
-    await call("GET", "/api/agent/commands?key=AGENT_PUBLIC_KEY", {
+    await call("GET", `/api/agent/commands?key=${P256_PUBLIC_KEY_A}`, {
       auth: tokens.access_token,
     });
     const listed = await call("GET", "/api/devices", { auth: await idToken() });
-    expect(listed.body.devices[0].agentPublicKey).toBe("AGENT_PUBLIC_KEY");
+    expect(listed.body.devices[0].agentPublicKey).toBe(P256_PUBLIC_KEY_A);
+  });
+
+  it("refuses a malformed agent key instead of publishing it", async () => {
+    const tokens = await login();
+    const result = await call("GET", "/api/agent/commands?key=not-a-p256-key", {
+      auth: tokens.access_token,
+    });
+    expect(result.status).toBe(400);
+    const listed = await call("GET", "/api/devices", { auth: await idToken() });
+    expect(listed.body.devices[0].agentPublicKey).toBeUndefined();
+    expect(listed.body.devices[0].agentSeenAt).toBeUndefined();
   });
 
   it("records the harnesses a polling agent found on its machine", async () => {
     const tokens = await login();
-    await call("GET", "/api/agent/commands?key=K&harnesses=claude-code,openclaw", {
+    await call("GET", `/api/agent/commands?key=${P256_PUBLIC_KEY_A}&harnesses=claude-code,openclaw`, {
       auth: tokens.access_token,
     });
     const listed = await call("GET", "/api/devices", { auth: await idToken() });
@@ -895,7 +910,7 @@ describe("relaying a sealed password", () => {
 
   it("says nothing about a machine that has never reported its harnesses", async () => {
     const tokens = await login();
-    await call("GET", "/api/agent/commands?key=K", { auth: tokens.access_token });
+    await call("GET", `/api/agent/commands?key=${P256_PUBLIC_KEY_A}`, { auth: tokens.access_token });
     const listed = await call("GET", "/api/devices", { auth: await idToken() });
     /* Undefined is "not known", which the browser must not read as "absent". */
     expect(listed.body.devices[0].harnesses).toBeUndefined();
@@ -910,10 +925,10 @@ describe("relaying a sealed password", () => {
 
   it("takes a new key when the agent restarts", async () => {
     const tokens = await login();
-    await call("GET", "/api/agent/commands?key=FIRST", { auth: tokens.access_token });
-    await call("GET", "/api/agent/commands?key=SECOND", { auth: tokens.access_token });
+    await call("GET", `/api/agent/commands?key=${P256_PUBLIC_KEY_A}`, { auth: tokens.access_token });
+    await call("GET", `/api/agent/commands?key=${P256_PUBLIC_KEY_B}`, { auth: tokens.access_token });
     const listed = await call("GET", "/api/devices", { auth: await idToken() });
-    expect(listed.body.devices[0].agentPublicKey).toBe("SECOND");
+    expect(listed.body.devices[0].agentPublicKey).toBe(P256_PUBLIC_KEY_B);
   });
 
   it("ties a session back to the request that started it", async () => {
@@ -956,6 +971,14 @@ describe("organizations", () => {
     const first = await orgFor("uid-1", "a@one.com");
     const second = await orgFor("uid-2", "b@two.com");
     expect(first.organization.id).not.toBe(second.organization.id);
+  });
+
+  it("refuses a malformed browser public key", async () => {
+    const result = await call("GET", "/api/org?key=not-a-p256-key", {
+      auth: await idToken(),
+    });
+    expect(result.status).toBe(400);
+    expect((await store.membershipOf("uid-1"))?.publicKey).toBeUndefined();
   });
 
   it("puts someone who follows an invite into that organization", async () => {
@@ -1013,6 +1036,35 @@ describe("organizations", () => {
     /* They still get an organization, and are told why it is not the one. */
     expect(wrong.body.joined).toBe(false);
     expect(wrong.body.inviteError).toContain("different email");
+  });
+
+  it("requires a verified identity before accepting an email-targeted invite", async () => {
+    await orgFor("uid-1", "owner@acme.com");
+    const invite = await call("POST", "/api/org/invites", {
+      auth: await idToken({ sub: "uid-1", email: "owner@acme.com" }),
+      body: { role: "member", email: "wanted@acme.com" },
+    });
+    const attempted = await call("GET", `/api/org?invite=${invite.body.invite.id}`, {
+      auth: await idToken({
+        sub: "uid-unverified",
+        email: "wanted@acme.com",
+        email_verified: false,
+      }),
+    });
+    expect(attempted.body.joined).toBe(false);
+    expect(attempted.body.inviteError).toContain("Verify that email");
+  });
+
+  it("keeps open-link invites available to unverified identities", async () => {
+    await orgFor("uid-1", "owner@acme.com");
+    const invite = await call("POST", "/api/org/invites", {
+      auth: await idToken({ sub: "uid-1", email: "owner@acme.com" }),
+      body: { role: "member" },
+    });
+    const joined = await call("GET", `/api/org?invite=${invite.body.invite.id}`, {
+      auth: await idToken({ sub: "uid-unverified", email_verified: false }),
+    });
+    expect(joined.body.joined).toBe(true);
   });
 
   it("cannot use one invite twice", async () => {
@@ -1146,6 +1198,41 @@ describe("session ownership and handoff", () => {
     expect(handed.body.session.assigneeUid).toBe("uid-1");
   });
 
+  it("returns only the caller's password copy after a handoff", async () => {
+    const { colleague } = await orgWithColleague();
+    const path = `/api/sessions/${session.id}/keys`;
+    await call("PUT", path, {
+      auth: await idToken(),
+      body: {
+        shares: [
+          { uid: "uid-1", sender_public_key: P256_PUBLIC_KEY_A, sealed: SESSION_SHARE_A },
+          { uid: "uid-2", sender_public_key: P256_PUBLIC_KEY_B, sealed: SESSION_SHARE_B },
+        ],
+      },
+    });
+
+    const handed = await call("PUT", `/api/sessions/${session.id}/assignee`, {
+      auth: await idToken(),
+      body: { uids: ["uid-2"] },
+    });
+    expect(handed.status).toBe(200);
+    expect(handed.body.session.keyShare).toEqual({
+      uid: "uid-1",
+      senderPublicKey: P256_PUBLIC_KEY_A,
+      sealed: SESSION_SHARE_A,
+    });
+    expect(handed.body.session.keyShares).toBeUndefined();
+    expect(handed.body.session.sharedWith).toEqual(["uid-2"]);
+
+    const colleagueView = await call("GET", `/api/sessions/${session.id}`, { auth: colleague });
+    expect(colleagueView.body.session.keyShare).toMatchObject({
+      uid: "uid-2",
+      sealed: SESSION_SHARE_B,
+    });
+    expect(colleagueView.body.session.keyShares).toBeUndefined();
+    expect(colleagueView.body.session.sharedWith).toBeUndefined();
+  });
+
   it("allows a session to be left unassigned", async () => {
     await orgWithColleague();
     const handed = await call("PUT", `/api/sessions/${session.id}/assignee`, {
@@ -1160,7 +1247,7 @@ describe("session ownership and handoff", () => {
   it("lets a colleague keep their own copy of a key, and nobody else's", async () => {
     const { colleague } = await orgWithColleague();
     const path = `/api/sessions/${session.id}/keys`;
-    const share = { sender_public_key: "BASE64_PUBLIC_KEY", sealed: "v2.BASE64_SEALED" };
+    const share = { sender_public_key: P256_PUBLIC_KEY_A, sealed: `v2.${SESSION_SHARE_A}` };
 
     const forOwner = await call("PUT", path, { auth: colleague, body: { shares: [{ uid: "uid-1", ...share }] } });
     expect(forOwner.status).toBe(403);
@@ -1169,14 +1256,14 @@ describe("session ownership and handoff", () => {
     const own = await call("PUT", path, { auth: colleague, body: { shares: [{ uid: "uid-2", ...share }] } });
     expect(own.status).toBe(200);
     const listed = await call("GET", "/api/sessions", { auth: colleague });
-    expect(listed.body.sessions[0].keyShare).toMatchObject({ sealed: "v2.BASE64_SEALED" });
+    expect(listed.body.sessions[0].keyShare).toMatchObject({ sealed: `v2.${SESSION_SHARE_A}` });
   });
 
   it("tells the owner, and only the owner, who holds a copy", async () => {
     const { colleague } = await orgWithColleague();
     await call("PUT", `/api/sessions/${session.id}/keys`, {
       auth: await idToken(),
-      body: { shares: [{ uid: "uid-2", sender_public_key: "K", sealed: "S" }] },
+      body: { shares: [{ uid: "uid-2", sender_public_key: P256_PUBLIC_KEY_A, sealed: SESSION_SHARE_A }] },
     });
     const owner = await call("GET", "/api/sessions", { auth: await idToken() });
     expect(owner.body.sessions[0].sharedWith).toEqual(["uid-2"]);
@@ -1189,8 +1276,8 @@ describe("session ownership and handoff", () => {
     const path = `/api/sessions/${session.id}/keys`;
     const shares = [{
       uid: "uid-2",
-      sender_public_key: "BASE64_PUBLIC_KEY",
-      sealed: "BASE64_SEALED_PASSWORD",
+      sender_public_key: P256_PUBLIC_KEY_A,
+      sealed: SESSION_SHARE_A,
     }];
 
     const shared = await call("PUT", path, { auth: await idToken(), body: { shares } });
@@ -1198,8 +1285,8 @@ describe("session ownership and handoff", () => {
 
     const listed = await call("GET", "/api/sessions", { auth: colleague });
     expect(listed.body.sessions[0].keyShare).toMatchObject({
-      senderPublicKey: "BASE64_PUBLIC_KEY",
-      sealed: "BASE64_SEALED_PASSWORD",
+      senderPublicKey: P256_PUBLIC_KEY_A,
+      sealed: SESSION_SHARE_A,
     });
 
     /* A colleague may keep their own copy, but cannot write one for anyone else. */
@@ -1214,8 +1301,8 @@ describe("session ownership and handoff", () => {
       body: {
         shares: [{
           uid: "uid-outside",
-          sender_public_key: "BASE64_PUBLIC_KEY",
-          sealed: "BASE64_SEALED_PASSWORD",
+          sender_public_key: P256_PUBLIC_KEY_A,
+          sealed: SESSION_SHARE_A,
         }],
       },
     });
@@ -1251,6 +1338,29 @@ describe("session ownership and handoff", () => {
       body: { uid: "uid-stranger" },
     });
     expect(attempt.status).toBe(404);
+  });
+
+  it("keeps another organization outside every session mutation path", async () => {
+    const tokens = await login();
+    await call("POST", "/api/sessions", { auth: tokens.access_token, body: session });
+    const stranger = await idToken({ sub: "uid-9", email: "stranger@elsewhere.com" });
+
+    expect((await call("GET", `/api/sessions/${session.id}`, { auth: stranger })).status).toBe(404);
+    expect((await call("PUT", `/api/sessions/${session.id}/assignee`, {
+      auth: stranger,
+      body: { uids: ["uid-9"] },
+    })).status).toBe(404);
+    expect((await call("PUT", `/api/sessions/${session.id}/keys`, {
+      auth: stranger,
+      body: {
+        shares: [{ uid: "uid-9", sender_public_key: "STRANGER_KEY", sealed: "STRANGER_SHARE" }],
+      },
+    })).status).toBe(404);
+    expect((await call("DELETE", `/api/sessions/${session.id}`, { auth: stranger })).status).toBe(404);
+    expect((await call("POST", "/api/commands", {
+      auth: stranger,
+      body: { kind: "kill", session_id: session.id },
+    })).status).toBe(404);
   });
 
   it("keeps an assignment when a persistent session re-registers", async () => {
@@ -1374,6 +1484,51 @@ describe("audit log", () => {
       ["input", input, 2000],
       ["interrupt", interrupt, 2001],
     ]);
+  });
+
+  it("does not let a browser forge service-owned audit events", async () => {
+    await withSession();
+    const forged = await call("POST", "/api/audit", {
+      auth: await idToken(),
+      body: {
+        entries: [
+          { session_id: session.id, kind: "handoff", text: "assigned to attacker@example.com" },
+          { session_id: session.id, kind: "stopped", text: "stopped" },
+          { session_id: session.id, kind: "deleted", text: "deleted" },
+        ],
+      },
+    });
+    expect(forged.body).toEqual({ written: 0, refused: 3 });
+    const log = await call("GET", `/api/audit/${session.id}`, { auth: await idToken() });
+    expect(log.body.events).toEqual([]);
+  });
+
+  it("accepts terminal input only from an owner or assignee", async () => {
+    const tokens = await login();
+    await call("POST", "/api/sessions", { auth: tokens.access_token, body: session });
+    const invite = await call("POST", "/api/org/invites", {
+      auth: await idToken(),
+      body: { role: "member" },
+    });
+    const colleague = await idToken({ sub: "uid-2", email: "colleague@example.com" });
+    await call("GET", `/api/org?invite=${invite.body.invite.id}`, { auth: colleague });
+    const input = { session_id: session.id, kind: "input", text: await sealedEntry(), at: 2000 };
+
+    const watching = await call("POST", "/api/audit", {
+      auth: colleague,
+      body: { entries: [input] },
+    });
+    expect(watching.body).toEqual({ written: 0, refused: 1 });
+
+    await call("PUT", `/api/sessions/${session.id}/assignee`, {
+      auth: await idToken(),
+      body: { uids: ["uid-2"] },
+    });
+    const assigned = await call("POST", "/api/audit", {
+      auth: colleague,
+      body: { entries: [input] },
+    });
+    expect(assigned.body).toEqual({ written: 1, refused: 0 });
   });
 
   /* Longer than the old plaintext cap: trimming ciphertext would destroy it. */
@@ -1931,6 +2086,40 @@ describe("session vault", () => {
     expect(listed.body.sessions[0].keyShare).toMatchObject(share);
   });
 
+  it("replaces stale vault copies when the CLI rotates an active password", async () => {
+    const tokens = await login();
+    const invite = await call("POST", "/api/org/invites", { auth: await idToken(), body: { role: "member" } });
+    const colleague = await idToken({ sub: "uid-2", email: "colleague@example.com" });
+    await call("GET", `/api/org?invite=${invite.body.invite.id}`, { auth: colleague });
+    const { made, body } = await vaultBody();
+    await call("POST", "/api/vault", { auth: await idToken(), body });
+    const oldShare = await sealToAccount(made.bundle.publicKey, session.id, "uid-1", "old-pass");
+    await call("POST", "/api/sessions", {
+      auth: tokens.access_token,
+      body: { ...session, owner_share: { sender_public_key: oldShare.senderPublicKey, sealed: oldShare.sealed } },
+    });
+    await call("PUT", `/api/sessions/${session.id}/keys`, {
+      auth: await idToken(),
+      body: { shares: [{ uid: "uid-2", sender_public_key: "old-sender", sealed: "old-copy" }] },
+    });
+
+    const freshShare = await sealToAccount(made.bundle.publicKey, session.id, "uid-1", "new-pass");
+    const rotated = await call("POST", "/api/sessions", {
+      auth: tokens.access_token,
+      body: {
+        ...session,
+        share_url: `${session.share_url.slice(0, -22)}BBBBBBBBBBBBBBBBBBBBBB`,
+        credential_rotation: true,
+        owner_share: { sender_public_key: freshShare.senderPublicKey, sealed: freshShare.sealed },
+      },
+    });
+    expect(rotated.status).toBe(201);
+    const owner = await call("GET", "/api/sessions", { auth: await idToken() });
+    expect(owner.body.sessions[0].keyShare).toMatchObject(freshShare);
+    const other = await call("GET", "/api/sessions", { auth: colleague });
+    expect(other.body.sessions[0].keyShare).toBeUndefined();
+  });
+
   it("still registers a session whose sealed copy is not shaped like one", async () => {
     const tokens = await login();
     const registered = await call("POST", "/api/sessions", {
@@ -2139,8 +2328,8 @@ describe("team audit key", () => {
     const colleague = await withColleague();
     await makeKey([{ uid: "uid-1", sealed: sealedCopy() }]);
     const first = sealedCopy();
-    const put = (sealed: string) =>
-      call("PUT", "/api/team-key/shares", { auth: colleague, body: { version: 1, shares: [{ uid: "uid-2", sealed }] } });
+    const put = async (sealed: string) =>
+      call("PUT", "/api/team-key/shares", { auth: await idToken(), body: { version: 1, shares: [{ uid: "uid-2", sealed }] } });
     expect((await put(first)).body.shared).toBe(1);
     expect((await put(sealedCopy())).body.shared).toBe(0);
     expect((await call("GET", "/api/team-key", { auth: colleague })).body.share.sealed).toBe(first);
@@ -2150,6 +2339,17 @@ describe("team audit key", () => {
       body: { version: 1, shares: [{ uid: "uid-1", sealed: sealedCopy() }] },
     });
     expect(overOwner.body.shared).toBe(0);
+  });
+
+  it("does not let a member without the team key poison missing shares", async () => {
+    const colleague = await withColleague();
+    await makeKey([{ uid: "uid-1", sealed: sealedCopy() }]);
+    const attempt = await call("PUT", "/api/team-key/shares", {
+      auth: colleague,
+      body: { version: 1, shares: [{ uid: "uid-2", sealed: sealedCopy() }] },
+    });
+    expect(attempt.status).toBe(403);
+    expect((await call("GET", "/api/team-key", { auth: colleague })).body.share).toBeNull();
   });
 
   it("refuses copies of a key that is not the current one", async () => {

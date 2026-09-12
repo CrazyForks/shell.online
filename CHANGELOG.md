@@ -4,10 +4,52 @@ All notable user-visible changes are recorded here. Versions follow [Semantic Ve
 
 ## Unreleased
 
+## [0.12.2] — 2026-09-12
+
+### Added
+
+- A standalone, single-node relay for ordinary Docker hosts. It uses Node.js,
+  WebSockets, local metadata state and Caddy-managed TLS, and requires no
+  Cloudflare account or credentials.
+- A versioned self-hosting documentation page and a release image at
+  `ghcr.io/teoslayer/shell.online-relay` for amd64 and arm64.
+- `shell password <ID>` retrieves an active session password from the local
+  owner-only record. `shell password rotate <ID>` changes credentials without
+  restarting the process and persists the new generation for stable sessions.
+
+### Changed
+
+- `--no-e2ee` output refers to the configured relay instead of assuming every
+  deployment runs on Cloudflare.
+- Session assignments and permission handoffs now update in place, without a
+  reconnect or a window where the former writer can still send input.
+
 ### Fixed
 
 - Keep `--auto-close today` valid throughout the final second of the local
   day, rather than expiring at the instant that second begins.
+- Keep notifications, audit entries, session password shares, and member
+  removal inside the active organization.
+- Escape CLI login callback content, keep the mobile account menu usable, and
+  reject invalid terminal dimensions before they reach a PTY.
+
+### Security
+
+- Password rotation switches the host cipher before disconnecting existing
+  viewers, atomically replaces the owner's sealed account-vault copy, and
+  removes stale teammate copies. The relay receives neither old nor new
+  plaintext credentials.
+- A verified browser cache can no longer overwrite a newer vault generation.
+  Vault credentials are tried first and replace stale local cache entries only
+  after successfully opening a live encrypted frame.
+- Removing a team member now deletes every session-password copy sealed to
+  that account. Owners must still rotate active sessions to revoke passwords a
+  former member may already have seen.
+- Targeted email invitations require a verified Firebase email. Team-key and
+  session-key shares now reject invalid P-256 identities and oversized or
+  malformed ciphertext, and key distributors must already hold the team key.
+- The accounts app now sends a restrictive browser security policy from both
+  its Node server and Cloudflare Worker deployment.
 
 ## [0.12.1] — 2026-09-12
 

@@ -42,6 +42,22 @@ Homebrew 6 asks you to trust a third-party tap once. Older versions have no
 Installers verify checksums. Release binaries and `SHA256SUMS` are available on
 the [releases page](https://github.com/TeoSlayer/shell.online/releases).
 
+## Platform compatibility
+
+| OS | Architectures | Verification |
+| --- | --- | --- |
+| macOS | amd64, arm64 | Build |
+| Windows | 386, amd64, arm64 | Native ConPTY on amd64; build on others |
+| Linux | 386, amd64, armv5/6/7, arm64, LoongArch64, MIPS/MIPSLE/MIPS64/MIPS64LE, PPC64/PPC64LE, RISC-V 64, s390x | Runtime under QEMU |
+| FreeBSD | 386, amd64, armv7, arm64 | Build |
+| OpenBSD | 386, amd64, armv7, arm64, ppc64, riscv64 | Build |
+| NetBSD | 386, amd64, armv7, arm64 | Build |
+| DragonFly BSD | amd64 | Build |
+| Solaris | amd64 | Build |
+
+See [platform details](https://shell.online/platforms/) for PTY, router, ROS,
+installer, and test caveats.
+
 ## Usage
 
 ```sh
@@ -53,6 +69,8 @@ shell --auto-close 5m <command>           # set an earlier deadline
 shell --persistent <file> <command>       # reuse a URL and password
 
 shell list                                # list local sessions (adapts to terminal width)
+shell password <id>                       # retrieve an active password locally
+shell password rotate <id>                # revoke it without restarting the process
 shell attach <id>                         # attach locally
 shell kill <id>                           # stop a session
 ```
@@ -72,6 +90,10 @@ type with the permissions of the wrapped process; use `--read-only` when viewers
 should only watch. See the [security model](https://shell.online/security/) and
 [the security policy](.github/SECURITY.md).
 
+Active passwords remain recoverable on their owner machine; account-linked
+passwords are also sealed into the user's E2EE vault. Without either owner-held
+copy there is intentionally no service-side recovery key.
+
 ## Accounts and containers
 
 Accounts are optional. `shell login` groups sessions from linked machines in
@@ -85,6 +107,10 @@ docker compose up -d
 docker compose logs shell-online
 ```
 
+## Star History
+
+[![Star History Chart](https://api.star-history.com/svg?repos=TeoSlayer/shell.online&type=Date)](https://www.star-history.com/#TeoSlayer/shell.online&Date)
+
 ## Documentation
 
 - [Quick start](https://shell.online/docs/)
@@ -94,7 +120,7 @@ docker compose logs shell-online
 - [End-to-end encryption](https://shell.online/e2ee/)
 - [Containers](https://shell.online/docker/)
 - [Platforms](https://shell.online/platforms/)
-- [Self-hosting](docs/self-hosting.md)
+- [Self-hosting](https://shell.online/self-hosting/) — Docker or Cloudflare
 
 ## Development
 
@@ -109,9 +135,9 @@ npm run test:app
 
 See [the contribution guide](.github/CONTRIBUTING.md) before opening a pull request.
 
-## Star History
+## Contributors
 
-[![Star History Chart](https://api.star-history.com/svg?repos=TeoSlayer/shell.online&type=Date)](https://www.star-history.com/#TeoSlayer/shell.online&Date)
+[![shell.online contributors](https://contrib.rocks/image?repo=TeoSlayer/shell.online)](https://github.com/TeoSlayer/shell.online/graphs/contributors)
 
 MIT licensed. See [`LICENSE`](LICENSE).
 

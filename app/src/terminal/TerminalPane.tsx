@@ -94,6 +94,14 @@ export function TerminalPane({
   const [unlocking, setUnlocking] = useState(false);
 
   /*
+   * Assignment can change while this pane is open. Read the current answer
+   * from a ref inside xterm's long-lived input callback, rather than rebuilding
+   * the terminal and dropping its socket and scrollback on every handoff.
+   */
+  const canTypeRef = useRef(canType);
+  canTypeRef.current = canType;
+
+  /*
    * Only the visible pane measures itself. A hidden one is still laid out, so
    * it would measure fine here, but refusing to refit it at all means no
    * future layout change can quietly restyle somebody's running terminal.
@@ -234,8 +242,11 @@ export function TerminalPane({
           pending.current = [];
           if (!worked || !sessionId) return;
           /* Written only now that it has proved itself; see handleUnlock. */
-          if (worked.source === "typed") rememberVerified(sessionId, worked.password);
-          if (worked.source === "cache") markVerified(sessionId, worked.password);
+          if (worked.source === "typed" || worked.source === "vault") {
+            /* Also replaces a locally verified password from before rotation. */
+            rememberVerified(sessionId, worked.password, shareUrl);
+          }
+          if (worked.source === "cache") markVerified(sessionId, worked.password, shareUrl);
           /*
            * A password that opened the session but did not come from the
            * vault goes into it now, so no browser has to be told it again.
@@ -249,7 +260,7 @@ export function TerminalPane({
         },
         onReadOnly: (value) => {
           setReadOnly(value);
-          term.options.disableStdin = value;
+          term.options.disableStdin = value || !canTypeRef.current;
         },
         /* A portrait viewer takes a capable session to 80x40, and back when it leaves. */
         onGrid: (next) => {
@@ -289,11 +300,11 @@ export function TerminalPane({
       : null;
 
     const typed = term.onData((data) => {
-      if (!canType) return;
+      if (!canTypeRef.current) return;
       connected.send(data);
       sink?.observe(data);
     });
-    term.options.disableStdin = !canType;
+    term.options.disableStdin = !canTypeRef.current;
 
     const sessionId = sessionIdFromShareUrl(shareUrl);
     attempt.current = null;
@@ -310,10 +321,9 @@ export function TerminalPane({
 
     /*
      * Every password within reach is tried before anyone is asked. One this
-     * browser has already seen open the session goes first: a vault copy is
-     * sealed with an ephemeral key, so anyone holding the public key could
-     * have made one, and a proven password should not give way to a copy
-     * nobody can vouch for. Then the vault's copy, then a cached guess, then
+     * The current vault copy goes first. A password cached as verified may
+     * belong to the credential generation before a live rotation; "worked in
+     * the past" is not proof that it is current. Then a cached password, then
      * one a colleague sealed to this browser's old key. The gate appears only
      * when all of them fail, or there are none.
      */
@@ -327,7 +337,6 @@ export function TerminalPane({
       };
       const opener = vaultRef.current;
       const cached = cachedPassword(sessionId);
-      if (cached?.verified) add("cache", cached.password);
       if (initial && isVaultShare(initial.sealed)) add("vault", await opener.openShare(sessionId, initial));
       add("cache", cached?.password);
       if (initial && !isVaultShare(initial.sealed)) add("legacy", await opener.openShare(sessionId, initial));
@@ -364,7 +373,18 @@ export function TerminalPane({
       measure.current = null;
       connection.current = null;
     };
-  }, [shareUrl, refit, canType]);
+  }, [shareUrl, refit]);
+
+  /*
+   * Apply a handoff in place. The relay's own read-only bit still wins, and
+   * the callback above checks the same ref as a second guard against input
+   * arriving between a render and this effect.
+   */
+  useEffect(() => {
+    canTypeRef.current = canType;
+    if (!terminal.current) return;
+    terminal.current.options.disableStdin = readOnly || !canType;
+  }, [canType, readOnly]);
 
   /*
    * A share that arrives while the pane is asking for a password, such as the
@@ -391,10 +411,10 @@ export function TerminalPane({
     if (!active) return;
     const frame = requestAnimationFrame(() => {
       refit();
-      if (!readOnly) terminal.current?.focus();
+      if (!readOnly && canType) terminal.current?.focus();
     });
     return () => cancelAnimationFrame(frame);
-  }, [active, readOnly, refit]);
+  }, [active, readOnly, canType, refit]);
 
   async function handleUnlock(event: FormEvent) {
     event.preventDefault();

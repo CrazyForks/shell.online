@@ -524,6 +524,7 @@ function recordAssetAnalytics(
     ["/security/", "docs_security"],
     ["/e2ee/", "docs_e2ee"],
     ["/docker/", "docs_docker"],
+    ["/self-hosting/", "docs_self_hosting"],
   ]).get(url.pathname);
   const target = documentTarget ?? (
     SESSION_ID_PATTERN.test(url.pathname.replace(/^\/s\//, "").replace(/\/$/, ""))
@@ -1063,6 +1064,22 @@ export class TerminalSession extends DurableObject<Env> {
       return;
     }
 
+    if (event.type === "credentials_rotate") {
+      /*
+       * The relay never receives either credential. It only creates a hard
+       * boundary: the host swaps ciphers before sending this event, then every
+       * viewer connected under the previous key is removed. Reconnecting with
+       * an old password may
+       * reach the socket, but cannot authenticate a single encrypted frame.
+       */
+      for (const viewer of this.state.getWebSockets("viewer")) {
+        safeSend(viewer, JSON.stringify({ type: "credentials_rotated" }));
+        safeClose(viewer, 4003, "session credentials rotated");
+      }
+      sendJson(socket, { type: "credentials_rotate_ack" });
+      return;
+    }
+
     if (event.type !== "exit") {
       safeClose(socket, 4002, "unknown control message");
       return;
@@ -1545,7 +1562,12 @@ export class TerminalSession extends DurableObject<Env> {
       .filter((socket) => socket.readyState === 1)
       .some((socket) => readAttachment(socket)?.supportsPortraitGrid === true);
     const grid = terminalGridForDevices(devices, supportsPortraitGrid);
-    const message = JSON.stringify({ type: "terminal_size", ...grid });
+    const message = JSON.stringify({
+      type: "terminal_size",
+      ...grid,
+      /* Feature negotiation keeps a new CLI safe against an older relay. */
+      credentialRotation: true,
+    });
     for (const socket of this.state.getWebSockets()) {
       if (socket === excluded) continue;
       const attachment = readAttachment(socket);
@@ -1643,7 +1665,7 @@ function secureAssetResponse(response: Response, pathname: string, hostname: str
 }
 
 function isPublicDocumentPath(pathname: string): boolean {
-  return pathname === "/" || pathname === "/docs/" || pathname === "/mobile/" || pathname === "/reliability/" || pathname === "/security/" || pathname === "/e2ee/" || pathname === "/docker/";
+  return pathname === "/" || pathname === "/docs/" || pathname === "/mobile/" || pathname === "/reliability/" || pathname === "/security/" || pathname === "/e2ee/" || pathname === "/docker/" || pathname === "/self-hosting/";
 }
 
 function secureStatsResponse(response: Response): Response {

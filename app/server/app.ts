@@ -1,7 +1,7 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { Store } from "./lib/store";
 import type { Invite, Membership } from "./lib/orgs";
-import type { AuditEvent } from "./lib/types";
+import type { AuditEvent, SessionRecord } from "./lib/types";
 import type { VerifyResult } from "./lib/firebase-token";
 import { exchangeCode, issueCode } from "./lib/codes";
 import {
@@ -19,7 +19,14 @@ import {
   sessionSource,
 } from "./lib/sessions";
 import { mintSecret } from "./lib/tokens";
-import { RESET_SIGN_IN_WINDOW_MS, isP256PublicKey, readOwnerShare, readVaultInput, vaultForApi } from "./lib/vault";
+import {
+  RESET_SIGN_IN_WINDOW_MS,
+  isP256PublicKey,
+  readOwnerShare,
+  readSessionKeyShare,
+  readVaultInput,
+  vaultForApi,
+} from "./lib/vault";
 import { isAuditEnvelope, isTeamKeyShare } from "./lib/audit-seal";
 import {
   changeRole,
@@ -32,7 +39,7 @@ import {
   notifyInvited,
   revokeInvite,
 } from "./routes/organizations";
-import { recordAudit, assignSession, auditCsv } from "./routes/audit";
+import { recordAudit, assignSession, auditCsv, SEALED_KINDS } from "./routes/audit";
 import { addComment, inbox, notifyAssigned, notifySessionStarted } from "./routes/social";
 import { deleteAccount } from "./routes/account";
 import { callerAddress, rateLimiter } from "./lib/rate-limit";
@@ -157,6 +164,24 @@ function sharedWith(
 ): string[] | undefined {
   if (!ownsSession(membership, session)) return undefined;
   return (session.keyShares ?? []).map((share) => share.uid).filter((uid) => uid !== membership.uid);
+}
+
+/**
+ * The session shape one signed-in member may receive.
+ *
+ * A stored session carries one sealed password per recipient. Even though a
+ * member cannot decrypt somebody else's copy, sending the whole array leaks
+ * who has a credential and makes an optimistic assignment response lose the
+ * caller's singular `keyShare` shape until the next poll. Every app response
+ * therefore goes through the same projection as the list and detail routes.
+ */
+function sessionForMember(membership: Membership, session: SessionRecord) {
+  const mine = session.keyShares?.find((share) => share.uid === membership.uid);
+  return {
+    ...sessionForApi(session),
+    keyShare: mine,
+    sharedWith: sharedWith(membership, session),
+  };
 }
 
 /*
@@ -465,6 +490,9 @@ export function createApp(options: AppOptions) {
         /* Publishing the browser key here keeps it current without a
            separate call on every sign-in. */
         const publicKey = url.searchParams.get("key");
+        if (publicKey && !(await isP256PublicKey(publicKey))) {
+          return send(response, 400, { error: "invalid browser public key" });
+        }
         if (publicKey) await store.setMemberKey(identity.uid, publicKey);
         const described = await describeOrganization(store, resolved.membership);
         return send(response, described.status, {
@@ -549,6 +577,15 @@ export function createApp(options: AppOptions) {
         let refused = 0;
         for (const entry of entries.slice(0, 100)) {
           const candidate = entry as Record<string, unknown>;
+          /*
+           * Handoffs, stops and deletions are service facts written beside the
+           * action itself. Letting a browser submit those kinds would let any
+           * member forge the team's audit trail with a plain API request.
+           */
+          if (!SEALED_KINDS.has(String(candidate.kind ?? "input"))) {
+            refused += 1;
+            continue;
+          }
           const result = await recordAudit(store, membership, {
             sessionId: String(candidate.session_id ?? ""),
             kind: String(candidate.kind ?? "input"),
@@ -654,6 +691,14 @@ export function createApp(options: AppOptions) {
         }
         const shares = readTeamShares(body.shares);
         if (!shares) return send(response, 400, { error: "invalid key shares" });
+        const current = await store.teamKeyShares(membership.orgId);
+        if (!current.some((share) =>
+          share.uid === membership.uid && share.version === key.version
+        )) {
+          return send(response, 403, {
+            error: "open your own copy of the team key before sharing it",
+          });
+        }
         const memberIds = new Set((await store.members(membership.orgId)).map((member) => member.uid));
         if (shares.some((share) => !memberIds.has(share.uid))) {
           return send(response, 400, { error: "key shares may only be sent to organization members" });
@@ -895,6 +940,33 @@ export function createApp(options: AppOptions) {
         if (!token) return send(response, 401, { error: "not signed in" });
         const body = (await readBody(request)) as Record<string, unknown>;
         const membership = await store.membershipOf(token.uid);
+        const rotation = body.credential_rotation === true;
+        const previous = rotation && membership
+          ? await store.sessionInOrg(membership.orgId, String(body.id ?? ""))
+          : null;
+        if (rotation && (!previous || (previous.ownerUid ?? previous.uid) !== token.uid)) {
+          return send(response, 404, { error: "no such owned session to rotate" });
+        }
+        if (rotation) {
+          const nextURL = String(body.share_url ?? "");
+          if (
+            !previous?.encrypted || body.encrypted !== true ||
+            nextURL === previous.shareUrl || !/#salt=[A-Za-z0-9_-]{22}$/.test(nextURL)
+          ) {
+            return send(response, 400, { error: "invalid credential rotation" });
+          }
+          const ownerShare = await readOwnerShare(body.owner_share);
+          const shares = ownerShare ? [{ uid: token.uid, ...ownerShare }] : [];
+          const rotated = await store.rotateSessionCredentials(
+            membership!.orgId,
+            previous!.id,
+            token.uid,
+            nextURL,
+            shares,
+          );
+          if (!rotated) return send(response, 404, { error: "no such owned session to rotate" });
+          return send(response, 201, { session: sessionForApi(rotated) });
+        }
         const result = await registerSession(store, token.uid, {
           id: String(body.id ?? ""),
           shareUrl: String(body.share_url ?? ""),
@@ -1008,15 +1080,9 @@ export function createApp(options: AppOptions) {
          * everyone's would be pointless, since they cannot open them, and
          * would put more sealed material on the wire than anyone needs.
          */
-        const sessions = (await store.listOrgSessions(membership.orgId)).map((session) => {
-          const mine = session.keyShares?.find((share) => share.uid === membership.uid);
-          return {
-            ...sessionForApi(session),
-            keyShares: undefined,
-            keyShare: mine,
-            sharedWith: sharedWith(membership, session),
-          };
-        });
+        const sessions = (await store.listOrgSessions(membership.orgId)).map((session) =>
+          sessionForMember(membership, session)
+        );
         return send(response, 200, {
           sessions,
           members: await store.members(membership.orgId),
@@ -1040,26 +1106,21 @@ export function createApp(options: AppOptions) {
 
         const body = (await readBody(request)) as Record<string, unknown>;
         const incoming = Array.isArray(body.shares) ? body.shares : [];
-        const shares = incoming
-          .map((entry) => entry as Record<string, unknown>)
-          .filter(
-            (entry) =>
-              typeof entry.uid === "string" &&
-              typeof entry.sender_public_key === "string" &&
-              typeof entry.sealed === "string",
-          )
-          .slice(0, 100)
-          .map((entry) => ({
-            uid: String(entry.uid),
-            senderPublicKey: String(entry.sender_public_key ?? ""),
-            sealed: String(entry.sealed),
-          }));
-
-        if (shares.length !== incoming.length || shares.some(
-          (share) => !share.uid || !share.senderPublicKey || !share.sealed ||
-            share.senderPublicKey.length > 512 || share.sealed.length > 4096,
-        )) {
+        if (incoming.length > 100) {
           return send(response, 400, { error: "invalid key share" });
+        }
+        const shares: { uid: string; senderPublicKey: string; sealed: string }[] = [];
+        for (const candidate of incoming) {
+          if (!candidate || typeof candidate !== "object") {
+            return send(response, 400, { error: "invalid key share" });
+          }
+          const entry = candidate as Record<string, unknown>;
+          if (typeof entry.uid !== "string" || !entry.uid) {
+            return send(response, 400, { error: "invalid key share" });
+          }
+          const parsed = await readSessionKeyShare(entry);
+          if (!parsed) return send(response, 400, { error: "invalid key share" });
+          shares.push({ uid: entry.uid, ...parsed });
         }
         if (!isOwner && shares.some((share) => share.uid !== membership.uid)) {
           return send(response, 403, { error: "only the session owner can share its key" });
@@ -1095,7 +1156,7 @@ export function createApp(options: AppOptions) {
             result.session.name || result.session.command,
           );
         }
-        return send(response, 200, { session: result.session });
+        return send(response, 200, { session: sessionForMember(membership, result.session) });
       }
 
       /* ---- Driving a machine from the browser ---- */
@@ -1245,9 +1306,13 @@ export function createApp(options: AppOptions) {
         const token = await requireCli(request);
         if (!token) return send(response, 401, { error: "not signed in" });
         /* The agent publishes its key on every poll, so a restart re-keys. */
+        const agentPublicKey = url.searchParams.get("key") ?? undefined;
+        if (agentPublicKey && !(await isP256PublicKey(agentPublicKey))) {
+          return send(response, 400, { error: "invalid agent public key" });
+        }
         await store.markAgentSeen(
           token.id,
-          url.searchParams.get("key") ?? undefined,
+          agentPublicKey,
           readHarnesses(url),
         );
         return send(response, 200, { commands: await store.claimCommands(token.id) });
@@ -1299,14 +1364,8 @@ export function createApp(options: AppOptions) {
         if (!membership) return send(response, 401, { error: "sign in first" });
         const session = await store.sessionInOrg(membership.orgId, oneSession[1]);
         if (!session) return send(response, 404, { error: "no such session" });
-        const mine = session.keyShares?.find((share) => share.uid === membership.uid);
         return send(response, 200, {
-          session: {
-            ...sessionForApi(session),
-            keyShares: undefined,
-            keyShare: mine,
-            sharedWith: sharedWith(membership, session),
-          },
+          session: sessionForMember(membership, session),
           members: await store.members(membership.orgId),
           you: membership,
           comments: await store.comments(membership.orgId, oneSession[1]),
@@ -1338,9 +1397,9 @@ export function createApp(options: AppOptions) {
         if (!membership) return send(response, 401, { error: "sign in first" });
         const body = (await readBody(request)) as Record<string, unknown>;
         if (typeof body.id === "string") {
-          await store.markNotificationRead(membership.uid, body.id);
+          await store.markNotificationRead(membership.orgId, membership.uid, body.id);
         } else {
-          await store.markAllNotificationsRead(membership.uid);
+          await store.markAllNotificationsRead(membership.orgId, membership.uid);
         }
         return send(response, 200, await inbox(store, membership));
       }

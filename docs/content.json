@@ -1,5 +1,5 @@
 {
-  "version": "0.12.1",
+  "version": "0.12.2",
   "pages": {
     "docs": {
       "eyebrow": "Documentation",
@@ -161,11 +161,11 @@
         ],
         [
           "Protected and visible data",
-          "Terminal input, output, snapshots, resizes, and latency probes are authenticated ciphertext. Cloudflare can still see connection IPs, timing, encrypted sizes, frame opcodes, access mode, labels, and lifecycle metadata."
+          "Terminal input, output, snapshots, and latency probes are authenticated ciphertext. Cloudflare can still see connection IPs, timing, encrypted sizes, frame opcodes, access mode, labels, lifecycle metadata, and the terminal grid dimensions carried by plaintext terminal_size control messages. The relay selects that shared grid so desktop and mobile viewers render one deterministic PTY size."
         ],
         [
           "Limits, recovery, and opt-out",
-          "E2EE cannot hide traffic shape or prevent the relay from dropping, delaying, or replaying a valid encrypted frame. A lost password cannot be recovered. Anyone with both the complete salted URL and password can decrypt. The legacy --e2ee flag is redundant; --no-e2ee deliberately disables payload E2EE and is visibly labeled."
+          "E2EE cannot hide traffic shape or prevent the relay from dropping, delaying, or replaying a valid encrypted frame. Active passwords can be retrieved on their owner machine with shell password <ID>; account-linked passwords are also sealed to the user's vault. If both owner-held copies are lost, the service has no recovery backdoor. shell password rotate <ID> changes the cipher without restarting the task and disconnects current viewers. Removing a team member deletes their sealed copies, but owners must rotate active sessions to revoke a password the former member may already know. Anyone with both the current salted URL and password can decrypt."
         ]
       ]
     },
@@ -211,7 +211,7 @@
             ],
             [
               "--no-e2ee",
-              "Disable payload E2EE for compatibility/debugging; Cloudflare can relay plaintext. Conflicts with passwords and persistence."
+              "Disable payload E2EE for compatibility/debugging; the configured relay can read plaintext. Conflicts with passwords and persistence."
             ],
             [
               "--persistent <state-file>",
@@ -245,15 +245,33 @@
         ],
         [
           "List sessions",
-          "List locally managed processes and independently check the relay. Wide terminals use a dense table; terminals narrower than 132 columns use one session card with the same status, URL, password, rejoin, and stop information. The owner-only record retains the generated browser password so access can be shared again without replacing the session. States are online, starting, reconnecting, expired, and unknown; unknown means the check was inconclusive, not that the link died.",
+          "List locally managed processes and independently check the relay. Wide terminals use a dense table; narrow terminals use one readable card. Human output says whether a password is stored without printing every secret; shell password <ID> reveals one deliberately. JSON retains e2ee_password for explicit agent workflows. States are online, starting, reconnecting, expired, and unknown.",
           [
             [
               "shell list",
-              "Print ID, uptime, relay, closing rule, access, command, URL, and password in a width-aware table or card layout."
+              "Print ID, uptime, relay, closing rule, access, command, URL, and stored-password status in a width-aware table or card layout."
             ],
             [
               "shell list --json",
               "Print a JSON array on stdout with e2ee_password and raw relay_status values: connected, waiting, disconnected, expired, or unknown."
+            ]
+          ]
+        ],
+        [
+          "Manage passwords",
+          "Retrieve an active password from its owner-only local record, or rotate credentials without restarting the wrapped process. Rotation disconnects current viewers, updates persistent state and the owner's sealed vault copy, and removes stale teammate copies until the new password is shared again.",
+          [
+            [
+              "shell password <ID>",
+              "Print the current browser password locally."
+            ],
+            [
+              "shell password rotate <ID>",
+              "Generate a new password and URL salt, invalidate the old cipher generation, and keep the same process running."
+            ],
+            [
+              "SHELL_ONLINE_E2EE_PASSWORD=<new> shell password rotate <ID>",
+              "Choose the replacement instead of generating eight random base64url characters."
             ]
           ]
         ],
@@ -541,6 +559,38 @@
         ]
       ]
     },
+    "self-hosting": {
+      "eyebrow": "Standalone relay",
+      "title": "Run the relay on any Docker host.",
+      "intro": "The standalone relay uses ordinary Node.js, WebSockets, local disk state, and Caddy. It needs no Cloudflare account or credentials and carries the same opaque E2EE frames as the hosted service.",
+      "seo": {
+        "description": "Self-host the shell.online relay outside Cloudflare with Docker, Caddy, local state, and the standard shell CLI.",
+        "socialTitle": "Self-host shell.online",
+        "socialDescription": "Run the shell.online relay on a normal Linux server without Cloudflare."
+      },
+      "cards": [
+        [
+          "Deploy",
+          "Point a domain at the host, set SHELL_ONLINE_PUBLIC_URL and SHELL_ONLINE_SITE to its HTTPS URL and hostname, then run docker compose up -d --build in standalone/. Caddy obtains and renews TLS certificates automatically."
+        ],
+        [
+          "Use it",
+          "Set SHELL_ONLINE_SERVER=https://relay.example.com or pass --server https://relay.example.com to the CLI. The generated share URL and WebSocket endpoint stay on that origin."
+        ],
+        [
+          "Security boundary",
+          "Terminal payloads remain end-to-end encrypted by default. The relay stores session metadata and SHA-256 host-token hashes, never browser passwords, E2EE keys, or terminal contents. Same-origin checks, frame limits, viewer limits, rate limits, backpressure and non-root containers remain enforced."
+        ],
+        [
+          "Scale and persistence",
+          "This deployment is deliberately single-node. Session metadata survives restarts in the relay-state volume and persistent clients reconnect with the same URL. Live WebSockets reconnect after a restart. Back up the volume, but do not run multiple relay replicas against one state file."
+        ],
+        [
+          "Cloudflare deployment remains available",
+          "wrangler.example.jsonc is still the supported global edge deployment. The standalone server is the portable path for one host; it does not include the optional accounts app or hosted analytics dashboard."
+        ]
+      ]
+    },
     "docker": {
       "eyebrow": "Persistent Docker terminal",
       "title": "One encrypted shell and one stable link across restarts.",
@@ -553,7 +603,7 @@
       "cards": [
         [
           "Start once",
-          "Pull ghcr.io/teoslayer/shell.online:0.12.1 or run docker compose up --build -d, then docker compose logs shell-online. First launch prints the stable URL and a generated eight-character password. The tagged amd64/arm64 image includes an SBOM and build provenance."
+          "Pull ghcr.io/teoslayer/shell.online:0.12.2 or run docker compose up --build -d, then docker compose logs shell-online. First launch prints the stable URL and a generated eight-character password. The tagged amd64/arm64 image includes an SBOM and build provenance."
         ],
         [
           "Two durable volumes",
@@ -561,7 +611,7 @@
         ],
         [
           "Password continuity",
-          "Set a longer SHELL_ONLINE_E2EE_PASSWORD only before first launch if desired. Restarts reuse the saved password. A conflicting configured password is refused; create a new state volume to rotate both password and URL."
+          "Set a longer SHELL_ONLINE_E2EE_PASSWORD before first launch if desired. Restarts reuse the saved password. While the container is running, shell password rotate <ID> changes the password, salt, and key without restarting the terminal; pass SHELL_ONLINE_E2EE_PASSWORD to that command when you want to choose the replacement."
         ],
         [
           "Restart behavior",

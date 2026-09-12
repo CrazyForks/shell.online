@@ -857,6 +857,54 @@ export class PostgresStore implements Store {
     return true;
   }
 
+  async rotateSessionCredentials(
+    orgId: string,
+    sessionId: string,
+    ownerUid: string,
+    shareUrl: string,
+    shares: SessionKeyShare[],
+  ): Promise<SessionRecord | null> {
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      const found = await client.query<Row>(
+        `SELECT * FROM sessions
+         WHERE org_id = $1 AND id = $2 AND COALESCE(owner_uid, uid) = $3 AND encrypted = true
+         FOR UPDATE`,
+        [orgId, sessionId, ownerUid],
+      );
+      const row = found.rows[0];
+      if (!row) {
+        await client.query("ROLLBACK");
+        return null;
+      }
+      const sessionUid = row.uid as string;
+      await client.query(
+        "UPDATE sessions SET share_url = $4 WHERE org_id = $1 AND id = $2 AND uid = $3",
+        [orgId, sessionId, sessionUid, shareUrl],
+      );
+      await client.query(
+        "DELETE FROM session_key_shares WHERE session_uid = $1 AND session_id = $2",
+        [sessionUid, sessionId],
+      );
+      for (const share of shares) {
+        await client.query(
+          `INSERT INTO session_key_shares
+             (session_uid, session_id, uid, sender_public_key, sealed)
+           VALUES ($1, $2, $3, $4, $5)`,
+          [sessionUid, sessionId, share.uid, share.senderPublicKey, share.sealed],
+        );
+      }
+      await client.query("COMMIT");
+      return toSession({ ...row, share_url: shareUrl }, shares);
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
   /* ---- Session vault ---- */
 
   async accountKey(uid: string): Promise<AccountKey | null> {
@@ -1159,11 +1207,30 @@ export class PostgresStore implements Store {
   }
 
   async removeMember(orgId: string, uid: string): Promise<boolean> {
-    const result = await this.pool.query(
-      "DELETE FROM memberships WHERE org_id = $1 AND uid = $2",
-      [orgId, uid],
-    );
-    return (result.rowCount ?? 0) > 0;
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      const result = await client.query(
+        "DELETE FROM memberships WHERE org_id = $1 AND uid = $2",
+        [orgId, uid],
+      );
+      if ((result.rowCount ?? 0) > 0) {
+        await client.query(
+          `DELETE FROM session_key_shares AS keys
+           USING sessions
+           WHERE keys.session_uid = sessions.uid AND keys.session_id = sessions.id
+             AND sessions.org_id = $1 AND keys.uid = $2`,
+          [orgId, uid],
+        );
+      }
+      await client.query("COMMIT");
+      return (result.rowCount ?? 0) > 0;
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
   }
 
   async setRole(orgId: string, uid: string, role: Role): Promise<boolean> {
@@ -1419,26 +1486,26 @@ export class PostgresStore implements Store {
     );
   }
 
-  async notificationsFor(uid: string, limit = 100): Promise<Notification[]> {
+  async notificationsFor(orgId: string, uid: string, limit = 100): Promise<Notification[]> {
     const rows = await this.rows(
-      'SELECT * FROM notifications WHERE uid = $1 ORDER BY at DESC, id COLLATE "C" DESC LIMIT $2',
-      [uid, limit],
+      'SELECT * FROM notifications WHERE org_id = $1 AND uid = $2 ORDER BY at DESC, id COLLATE "C" DESC LIMIT $3',
+      [orgId, uid, limit],
     );
     return rows.map(toNotification);
   }
 
-  async markNotificationRead(uid: string, id: string, now = Date.now()): Promise<boolean> {
+  async markNotificationRead(orgId: string, uid: string, id: string, now = Date.now()): Promise<boolean> {
     const result = await this.pool.query(
-      "UPDATE notifications SET read_at = $3 WHERE id = $2 AND uid = $1 AND read_at IS NULL",
-      [uid, id, now],
+      "UPDATE notifications SET read_at = $4 WHERE org_id = $1 AND uid = $2 AND id = $3 AND read_at IS NULL",
+      [orgId, uid, id, now],
     );
     return (result.rowCount ?? 0) > 0;
   }
 
-  async markAllNotificationsRead(uid: string, now = Date.now()): Promise<number> {
+  async markAllNotificationsRead(orgId: string, uid: string, now = Date.now()): Promise<number> {
     const result = await this.pool.query(
-      "UPDATE notifications SET read_at = $2 WHERE uid = $1 AND read_at IS NULL",
-      [uid, now],
+      "UPDATE notifications SET read_at = $3 WHERE org_id = $1 AND uid = $2 AND read_at IS NULL",
+      [orgId, uid, now],
     );
     return result.rowCount ?? 0;
   }
