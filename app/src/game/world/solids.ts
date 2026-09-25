@@ -1,4 +1,5 @@
 import { GARRISONS } from "./marches";
+import { builtAt, STRUCTURE_SCALE } from "./scale";
 
 /**
  * The ground a building stands on, which nobody may walk through.
@@ -40,7 +41,8 @@ export interface Solid {
  * roof overhanging it -- so it is a little under half the width.
  */
 function radiusFor(scale: number): number {
-  return 0.78 * scale;
+  /* Grown with the art, or people walk through the enlarged walls. */
+  return 0.78 * scale * STRUCTURE_SCALE;
 }
 
 let cache: Solid[] | undefined;
@@ -51,7 +53,8 @@ export function solids(): Solid[] {
   const out: Solid[] = [];
   for (const garrison of GARRISONS) {
     for (const building of garrison.buildings) {
-      out.push({ x: building.x, y: building.y, r: radiusFor(building.scale ?? 1) });
+      const at = builtAt(garrison, building);
+      out.push({ x: at.x, y: at.y, r: radiusFor(building.scale ?? 1) });
     }
   }
 
@@ -61,7 +64,7 @@ export function solids(): Solid[] {
    * thing on the map and the one people would most obviously walk through.
    */
   const keep = GARRISONS.find((holding) => holding.id === "keep");
-  if (keep) out.push({ x: keep.x, y: keep.y - 1, r: 3.4 });
+  if (keep) out.push({ x: keep.x, y: keep.y - 1, r: 3.4 * STRUCTURE_SCALE });
 
   cache = out;
   return out;

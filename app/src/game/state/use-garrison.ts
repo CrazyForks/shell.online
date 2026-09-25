@@ -6,6 +6,7 @@ import { ASSESSMENT_OFF, readAssessments, type AssessmentFeed } from "./assessme
 import { keepKnownLiveness, sessionEnded } from "../../lib/session-liveness";
 import { rosterFrom, type Roster } from "./sessions";
 import { setRoster, type Sim } from "../world/sim";
+import { adoptOrigin } from "../../lib/session-passwords";
 
 /** The same interval the session list polls on, so the two agree. */
 const POLL_MS = 4000;
@@ -156,6 +157,12 @@ export function useGarrison(
           timedOut,
         ]);
         if (!live) return;
+        /*
+         * A session started from this browser -- at the Forge, say -- was
+         * given a password here, remembered against the order that started
+         * it. Moved onto the session now it exists, as the session list does.
+         */
+        for (const session of result.sessions) adoptOrigin(session.origin, session.id, session.shareUrl);
         const sessions = keepKnownLiveness(seen.current, result.sessions);
         seen.current = sessions;
         const roster = rosterFrom(sessions, result.members, result.you, chosen.current);

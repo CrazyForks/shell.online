@@ -33,6 +33,11 @@ import { isCompact } from "./state/layout";
 import { kingdomStrength } from "./world/kingdom";
 import { ZOOM_STEP } from "./engine/zoom";
 import { PauseMenu } from "./ui/PauseMenu";
+import { KeepSheet } from "./ui/KeepSheet";
+import { Shop } from "./ui/Shop";
+import { Marches } from "./ui/Marches";
+import { Gathering } from "./ui/Gathering";
+import { Training } from "./ui/Training";
 import { Prompt } from "./ui/Prompt";
 import "../styles/game.css";
 
@@ -216,22 +221,54 @@ export default function GameRoute() {
   /* The one clicked wright, which is the only game state React needs. */
   const [picked, setPicked] = useState<Actor | undefined>();
   /*
-   * Which pane the pause menu should open on, set by whatever opened it. The
-   * vial on the field leads straight to the account of what the gathering has
-   * cost; everything else opens the menu where it was left.
+   * Which pane is open straight off the field, if any. The pedlar, the road
+   * book and the gathering are each opened by the HUD element that shows them,
+   * without going through the pause menu. The field keeps running behind them.
    */
-  const [pauseAt, setPauseAt] = useState<"gathering" | "marches" | undefined>();
+  const [sheet, setSheet] = useState<"shop" | "marches" | "gathering" | "train" | undefined>();
+  /*
+   * The name of a soldier ordered at the Forge and not yet on the field, so the
+   * Forge's button can say so. Cleared when it arrives, or when the machine has
+   * taken long enough that the beacon stops claiming anything.
+   */
+  const [recruit, setRecruit] = useState("");
+  const recruitTimer = useRef(0);
 
   const handle = useRef<KeepHandle>({
     sim: sim.current,
     select: () => {},
     lookAt: () => {},
+    follow: () => {},
+    train: () => {},
+    cancelTraining: () => {},
     wear: () => {},
     still: () => {},
     zoomBy: () => {},
     fit: () => {},
   });
   handle.current.onPick = setPicked;
+  /*
+   * The Forge's button follows the Forge across the screen. Positioned from the
+   * scene every frame, so it is written to the element rather than to state.
+   */
+  const forgeRef = useRef<HTMLButtonElement>(null);
+  handle.current.onForge = (at) => {
+    const button = forgeRef.current;
+    if (!button) return;
+    if (!at) {
+      button.style.visibility = "hidden";
+      return;
+    }
+    button.style.visibility = "visible";
+    button.style.transform =
+      `translate(${Math.round(at.x)}px, ${Math.round(at.y)}px) translate(-50%, -50%) scale(${at.scale.toFixed(3)})`;
+  };
+  handle.current.onTrained = (actorId) => {
+    window.clearTimeout(recruitTimer.current);
+    setRecruit("");
+    /* Go and meet them: the arrival is drawn where they stand. */
+    handle.current.follow(actorId);
+  };
   handle.current.onZoom = (at) =>
     setZoomAt((current) =>
       current.out === at.out && current.in === at.in ? current : { out: at.out, in: at.in },
@@ -342,21 +379,51 @@ export default function GameRoute() {
   useEffect(() => {
     const previous = document.body.style.overflow;
     document.body.style.overflow = "hidden";
+    /*
+     * And the page is not allowed to answer a gesture meant for the map.
+     *
+     * `overflow: hidden` on the body does not stop a touch scroll in Safari,
+     * and nothing at all stops Safari's own pinch-to-zoom of the whole page
+     * except refusing its gesture events -- `user-scalable=no` has been
+     * ignored for years. On a phone held sideways the page is taller than the
+     * screen it is shown in, so a drag or a pinch that started anywhere the
+     * canvas did not catch it scrolled or zoomed the page instead, and the map
+     * sat still underneath: "scrolling and zooming are blocked".
+     *
+     * Only inside the keep, and only multi-finger moves: a single finger still
+     * scrolls the lists and panes that are meant to scroll.
+     */
+    const root = document.documentElement;
+    const previousOverscroll = root.style.overscrollBehavior;
+    root.style.overscrollBehavior = "none";
+    const refuse = (event: Event) => event.preventDefault();
+    const pinchInside = (event: TouchEvent) => {
+      if (event.touches.length > 1 && event.target instanceof Element && event.target.closest(".keep")) {
+        event.preventDefault();
+      }
+    };
+    document.addEventListener("gesturestart", refuse, { passive: false });
+    document.addEventListener("gesturechange", refuse, { passive: false });
+    document.addEventListener("touchmove", pinchInside, { passive: false });
     return () => {
       document.body.style.overflow = previous;
+      root.style.overscrollBehavior = previousOverscroll;
+      document.removeEventListener("gesturestart", refuse);
+      document.removeEventListener("gesturechange", refuse);
+      document.removeEventListener("touchmove", pinchInside);
     };
   }, []);
 
   /* Escape pauses, and pauses again out of whatever the pause menu opened. */
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
-      if (event.key !== "Escape" || paused) return;
+      if (event.key !== "Escape" || paused || sheet) return;
       event.preventDefault();
       setPaused(true);
     };
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
-  }, [paused]);
+  }, [paused, sheet]);
 
   /*
    * Start on the pad opens the pause menu. Only while play is running: the
@@ -367,8 +434,38 @@ export default function GameRoute() {
     useCallback((action) => {
       if (action === "pause") setPaused(true);
     }, []),
-    !paused,
+    !paused && !sheet,
   );
+
+  /*
+   * Buying and wearing, which the pedlar's sheet calls.
+   *
+   * What is stored is the spend, not the purse. The purse is derived from the
+   * level that earned it, so storing both would be two facts that can disagree.
+   * A first purchase in a slot is worn at once, because nobody buys a colour in
+   * order to not wear it.
+   */
+  const onBuy = (skinId: string) => {
+    const result = buy(purse, skinId);
+    if (!result.ok) return;
+    const bought = skinById(skinId);
+    const next = {
+      ...save,
+      spent: save.spent + (purse.marks - result.purse.marks),
+      owned: result.purse.owned,
+      skinId: bought?.wears === "hero" ? save.skinId || skinId : save.skinId,
+      liveryId: bought?.wears === "retinue" ? save.liveryId || skinId : save.liveryId,
+    };
+    setSave(next);
+    handle.current.wear(tintFor(next.skinId), tintFor(next.liveryId));
+  };
+  const onWear = (skinId: string) => {
+    const chosen = skinById(skinId);
+    const next = chosen?.wears === "retinue" ? { ...save, liveryId: skinId } : { ...save, skinId };
+    setSave(next);
+    /* The field shows it at once, rather than on the next reload. */
+    handle.current.wear(tintFor(next.skinId), tintFor(next.liveryId));
+  };
 
   const shell = useMemo<GameShell>(
     () => ({ options, setOptions, reducedMotion, device, paused, setPaused }),
@@ -473,45 +570,59 @@ export default function GameRoute() {
                     : "Preview — no active sessions"
                   : "Live team sessions"
             }
-            onOpenGathering={() => {
-              setPauseAt("gathering");
-              setPaused(true);
-            }}
-            onOpenRoster={() => {
-              setPauseAt("marches");
-              setPaused(true);
-            }}
+            onOpenGathering={() => setSheet("gathering")}
+            onOpenRoster={() => setSheet("marches")}
+            onOpenShop={() => setSheet("shop")}
+            shopOpen={rank.level >= 2}
+            youUid={sim.current.youUid}
+            onFollow={(id) => handle.current.follow(id)}
+            pause={
+              <button
+                type="button"
+                className="keep-button keep-pause-button"
+                /*
+                 * Named here as well as written on, because a handset drops the
+                 * word to keep the button inside a corner it has to share with
+                 * the map -- and a control whose name is only its visible text
+                 * is a control that loses its name when the text goes.
+                 */
+                aria-label="Pause"
+                onClick={() => setPaused(true)}
+              >
+                <span aria-hidden="true">❙❙</span>
+                {/*
+                  * The word is a separate node so a handset can drop it and keep
+                  * the button, the hit area and the accessible name.
+                  */}
+                <span className="keep-button-word">Pause</span>
+              </button>
+            }
           />
 
           {/*
-            * The pause button holds the corner the HUD leaves for it, and the
-            * key prompt the one below. Both belong to the same ring of things
-            * around the edge of the eye; they are here rather than in `Hud`
-            * only because they are the route's to open and to label.
+            * The Forge's training yard, standing on the map at the Forge.
+            *
+            * A button over the canvas rather than something drawn in it,
+            * because it has to be focusable, named, and hit reliably by a
+            * thumb -- three things a canvas is bad at. It is moved to the
+            * Forge every frame by the scene; see `onForge` above.
             */}
-          <div className="keep-corner is-top-right">
+          {!paused && (
             <button
               type="button"
-              className="keep-button keep-pause-button"
-              /*
-               * Named here as well as written on, because a handset drops the
-               * word to keep the button inside a corner it has to share with
-               * the map -- and a control whose name is only its visible text
-               * is a control that loses its name when the text goes.
-               */
-              aria-label="Pause"
-              onClick={() => setPaused(true)}
+              ref={forgeRef}
+              className={`keep-forge-train${recruit ? " is-training" : ""}`}
+              style={{ visibility: "hidden" }}
+              onClick={() => setSheet("train")}
+              aria-label={recruit ? `Training ${recruit}. Train another soldier` : "Train a soldier at the Forge"}
             >
-              <span aria-hidden="true">❙❙</span>
-              {/*
-                * The word is a separate node so a handset can drop it and keep
-                * the button, the hit area and the accessible name. Shrinking
-                * the text to nothing would leave a label nobody can read
-                * claiming to be readable.
-                */}
-              <span className="keep-button-word">Pause</span>
+              <span className="keep-forge-train-glyph" aria-hidden="true">⚒</span>
+              <span className="keep-forge-train-text">
+                <span className="keep-forge-train-label">{recruit ? "Training…" : "Train soldiers"}</span>
+                {recruit && <span className="keep-forge-train-detail">{recruit}</span>}
+              </span>
             </button>
-          </div>
+          )}
 
           {/*
             * The way out of the map, for a screen with no wheel on it.
@@ -520,7 +631,7 @@ export default function GameRoute() {
             * costs a mouse nothing and it is the only thing on screen that
             * says the map can be pulled back at all.
             */}
-          <div className="keep-corner is-right">
+          <div className="keep-corner is-bottom-left">
             <ZoomControls
               onZoomIn={() => handle.current.zoomBy(ZOOM_STEP)}
               onZoomOut={() => handle.current.zoomBy(1 / ZOOM_STEP)}
@@ -561,60 +672,71 @@ export default function GameRoute() {
           <PauseMenu
             onResume={() => {
               setPaused(false);
-              /*
-               * Forgotten on the way out, or every later press of Escape would
-               * reopen the pane the vial last asked for rather than the menu.
-               */
-              setPauseAt(undefined);
             }}
             purse={purse}
             characterClass={save.characterClass || "terminal"}
-            wearing={save.skinId}
-            livery={save.liveryId}
-            shopOpen={rank.level >= 2}
             elixir={elixir}
             garrison={tally.wrights.length}
-            onTravel={(id) => handle.current.lookAt(id)}
             gathering={save.gathering}
             earned={earned}
             counted={known}
             onGathering={(on) => setSave({ ...save, gathering: on })}
-            openAt={pauseAt}
-            onBuy={(skinId) => {
-              const result = buy(purse, skinId);
-              if (!result.ok) return;
-              const bought = skinById(skinId);
-              /*
-               * What is stored is the spend, not the purse. The purse is
-               * derived from the level that earned it, so storing both would
-               * be two facts that can disagree.
-               *
-               * A first purchase in a slot is worn at once, because nobody buys
-               * a colour in order to not wear it.
-               */
-              const next = {
-                ...save,
-                spent: save.spent + (purse.marks - result.purse.marks),
-                owned: result.purse.owned,
-                skinId:
-                  bought?.wears === "hero" ? save.skinId || skinId : save.skinId,
-                liveryId:
-                  bought?.wears === "retinue" ? save.liveryId || skinId : save.liveryId,
-              };
-              setSave(next);
-              handle.current.wear(tintFor(next.skinId), tintFor(next.liveryId));
-            }}
-            onWear={(skinId) => {
-              const chosen = skinById(skinId);
-              const next =
-                chosen?.wears === "retinue"
-                  ? { ...save, liveryId: skinId }
-                  : { ...save, skinId };
-              setSave(next);
-              /* The field shows it at once, rather than on the next reload. */
-              handle.current.wear(tintFor(next.skinId), tintFor(next.liveryId));
-            }}
           />
+        )}
+
+        {sheet === "shop" && (
+          <KeepSheet title="The pedlar" onClose={() => setSheet(undefined)}>
+            <Shop
+              purse={purse}
+              characterClass={save.characterClass || "terminal"}
+              wearing={save.skinId}
+              livery={save.liveryId}
+              onBuy={onBuy}
+              onWear={onWear}
+              onBack={() => setSheet(undefined)}
+            />
+          </KeepSheet>
+        )}
+        {sheet === "marches" && (
+          <KeepSheet title="The Marches" onClose={() => setSheet(undefined)}>
+            <Marches
+              onTravel={(id) => {
+                handle.current.lookAt(id);
+                setSheet(undefined);
+              }}
+              onBack={() => setSheet(undefined)}
+            />
+          </KeepSheet>
+        )}
+        {sheet === "train" && (
+          <KeepSheet title="The Forge — train a soldier" onClose={() => setSheet(undefined)}>
+            <Training
+              onTrained={(name) => {
+                setSheet(undefined);
+                setRecruit(name);
+                handle.current.train();
+                /* Ride to the Forge, so the order is seen being carried out. */
+                handle.current.lookAt("forge");
+                window.clearTimeout(recruitTimer.current);
+                recruitTimer.current = window.setTimeout(() => {
+                  setRecruit("");
+                  handle.current.cancelTraining();
+                }, 90_000);
+              }}
+              onBack={() => setSheet(undefined)}
+            />
+          </KeepSheet>
+        )}
+        {sheet === "gathering" && (
+          <KeepSheet title="The gathering" onClose={() => setSheet(undefined)}>
+            <Gathering
+              on={save.gathering}
+              tokens={elixir}
+              onAgree={() => setSave({ ...save, gathering: true })}
+              onStop={() => setSave({ ...save, gathering: false })}
+              onBack={() => setSheet(undefined)}
+            />
+          </KeepSheet>
         )}
 
         {/*

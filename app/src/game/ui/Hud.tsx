@@ -7,10 +7,11 @@ import { sessionBreakdown } from "./session-breakdown";
 /**
  * What the player needs to know without opening anything.
  *
- * Four things, and nothing else: who they are and how far along, what they can
- * spend, what the stat-gathering has cost, and who is on the field. Everything
- * else lives behind the pause menu, because a heads-up display is screen space
- * borrowed from the thing it is displaying over.
+ * Who they are and how far along, and their own sessions, top left; what they
+ * can spend and what the gathering has cost, top right; the pedlar on the right
+ * edge; and how the kingdom stands, with the way into the road book, bottom
+ * right. Anything that opens something carries the same arrow, and opens it
+ * directly rather than by way of the pause menu.
  *
  * All of it is DOM rather than canvas. It does not move with the world, it has
  * to be readable by a screen reader, and it has to be reachable with a pad —
@@ -48,6 +49,16 @@ export interface HudProps {
   onOpenRoster: () => void;
   /** Opens the gathering: the notice when it is off, the bill when it is on. */
   onOpenGathering: () => void;
+  /** Opens the pedlar straight from the field. */
+  onOpenShop: () => void;
+  /** Whether the pedlar is calling yet; see progress.ts. */
+  shopOpen: boolean;
+  /** The signed-in player's uid, so their own sessions can be listed. */
+  youUid?: string;
+  /** Rides the camera to one of the player's own soldiers and opens its card. */
+  onFollow: (actorId: string) => void;
+  /** The pause button, which the route owns and which ends the top-right row. */
+  pause?: React.ReactNode;
 }
 
 /** The real work represented by the figures currently drawn on the field. */
@@ -185,6 +196,68 @@ function Muster({ strength, real }: { strength: Strength; real: boolean }) {
   );
 }
 
+/** The arrow every HUD element that opens something carries, and nothing else. */
+function Opens() {
+  return <span className="keep-opens" aria-hidden="true">▸</span>;
+}
+
+/** A soldier's work, as a word, because the list is read rather than glanced at. */
+function doing(actor: Actor): string {
+  if (actor.work === "bug") return "fixing";
+  if (actor.work === "feature") return "building";
+  return "waiting";
+}
+
+/**
+ * The player's own sessions, under their standing.
+ *
+ * Scrolls inside the panel rather than growing it: the panel keeps the size it
+ * had, and somebody with twenty sessions open should not find their map pushed
+ * off the screen by the list of them. Each row rides to the soldier and opens
+ * its card, which is where the way into the terminal already is.
+ */
+function YourSessions({
+  wrights,
+  youUid,
+  demo,
+  onFollow,
+}: {
+  wrights: Actor[];
+  youUid?: string;
+  demo: boolean;
+  onFollow: (actorId: string) => void;
+}) {
+  const yours = wrights
+    .filter((actor) => actor.heroUid !== undefined && actor.heroUid === youUid)
+    .sort((a, b) => (b.session?.startedAt ?? 0) - (a.session?.startedAt ?? 0));
+
+  return (
+    <section className="keep-yours" aria-label="Your sessions">
+      <h3 className="keep-yours-head">
+        Your sessions <span className="keep-yours-count">{yours.length}</span>
+      </h3>
+      {yours.length === 0 ? (
+        <p className="keep-yours-empty">
+          {demo ? "None of these are yours: it is an example." : "None running. Train one at the Forge."}
+        </p>
+      ) : (
+        <ul className="keep-yours-list">
+          {yours.map((actor) => (
+            <li key={actor.id}>
+              <button type="button" className="keep-yours-row" onClick={() => onFollow(actor.id)}>
+                <span className={`keep-yours-dot is-${actor.work}`} aria-hidden="true" />
+                <span className="keep-yours-name">{actor.name}</span>
+                <span className="keep-yours-work">{doing(actor)}</span>
+                <Opens />
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
+  );
+}
+
 export function Hud({
   standing,
   marks,
@@ -201,43 +274,29 @@ export function Hud({
   compact,
   onOpenRoster,
   onOpenGathering,
+  onOpenShop,
+  shopOpen,
+  youUid,
+  onFollow,
+  pause,
 }: HudProps) {
   const lore = CLASS_LORE[characterClass] ?? CLASS_LORE.terminal;
   const unlock = nextUnlock(standing.level);
   const { fixing, building, waiting } = sessionBreakdown(wrights);
 
   /*
-   * Corners rather than a bar.
+   * Corners rather than a bar, and each corner one kind of thing.
    *
-   * A strip across the top was one panel wide enough to reach from edge to edge
-   * and tall enough to hold three rows, and what it mostly did was cover the
-   * map. Everything on it is glanced at rather than read, and things that are
-   * glanced at belong at the edges of the eye, not across the middle of what
-   * you are looking at.
-   *
-   * So: who you are, top left, because it is the only thing here you might read
-   * a whole sentence of. What you have, bottom left, where money lives in every
-   * game anybody has played. Who is out, bottom right, next to the key prompt.
-   * The top right is left for the pause button, which was already there.
+   * Top left is the player: their standing and their own sessions. Top right
+   * is what they have: marks and elixir, beside the pause button. The right
+   * edge is the pedlar. Bottom right is the kingdom -- everybody's sessions,
+   * whether the line holds, and the road book. Bottom left is the zoom, which
+   * GameRoute places.
    */
   return (
     <>
       <div className="keep-corner is-top-left">
         <div className="keep-panel keep-standing">
-          <div className="keep-operational-head">
-            <span className="keep-operational-value">{sessionTotal.toLocaleString()}</span>
-            <span className="keep-operational-label">
-              {demo ? "example sessions" : sessionTotal === 1 ? "active session" : "active sessions"}
-            </span>
-          </div>
-          <p className="keep-operational-breakdown">
-            {fixing} fixing · {building} building · {waiting} waiting
-          </p>
-          <Muster strength={strength} real={real} />
-          <span className={`keep-data-state${demo ? " is-preview" : " is-live"}`}>
-            {dataState}
-          </span>
-          <div className="keep-standing-divider" />
           <div className="keep-standing-head">
             <span className="keep-crest" aria-hidden="true">
               <span className="keep-crest-letter">{lore.title.slice(0, 1)}</span>
@@ -253,42 +312,34 @@ export function Hud({
             of={standing.needed}
             tone="xp"
             detail={
-              counted
-                ? unlock
-                  ? `${unlock.name} at level ${unlock.level}`
-                  : "Nothing left to unlock"
-                : "An example standing — the service did not answer"
+              compact
+                ? undefined
+                : counted
+                  ? unlock
+                    ? `${unlock.name} at level ${unlock.level}`
+                    : "Nothing left to unlock"
+                  : "An example standing — the service did not answer"
             }
           />
+          <div className="keep-standing-divider" />
+          <YourSessions wrights={wrights} youUid={youUid} demo={demo} onFollow={onFollow} />
         </div>
       </div>
 
       {/*
-        * On a handset these three go, rather than shrinking.
-        *
-        * The floor this interface holds itself to is a floor: text does not
-        * get smaller to fit. So what gives is the content, and what gives
-        * first is the three panels whose numbers are looked up rather than
-        * glanced at -- all of which are one tap away in the pause menu. They
-        * are left out of the tree rather than hidden with CSS, because a
-        * hidden button is still in the tab order and still read aloud.
+        * What the player has, beside the pause button GameRoute puts in the
+        * same corner. The purse is a read-out; the vial is a way in, because a
+        * figure that stands for money somebody's machine has spent should be
+        * one press from the account of what spent it.
         */}
-      {!compact && (
-      <div className="keep-corner is-bottom-left">
-        <div className="keep-panel keep-purse">
+      <div className="keep-corner is-top-right keep-wealth">
+        <div className="keep-panel keep-purse" title={`${marks.toLocaleString()} ${WORLD.coin}`}>
           <span className="keep-coin" aria-hidden="true">◈</span>
           <span className="keep-purse-text">
             <span className="keep-purse-value">{marks.toLocaleString()}</span>
             <span className="keep-purse-label">{WORLD.coin}</span>
           </span>
         </div>
-
-        {/*
-          * The vial is a way in, not an ornament. A figure that stands for
-          * money somebody's machine has spent should be one press from the
-          * account of what spent it -- and while it is off, one press from the
-          * notice explaining what turning it on would read.
-          */}
         <button
           type="button"
           className="keep-panel keep-elixir-panel"
@@ -296,28 +347,68 @@ export function Hud({
           title={gathering ? "What the gathering has cost" : "Nothing is being read. What this is"}
         >
           <Elixir tokens={elixir} gathering={gathering} />
+          <Opens />
         </button>
+        {pause}
       </div>
-      )}
 
-      {!compact && (
-      <div className="keep-corner is-bottom-right">
-        <button type="button" className="keep-panel keep-roster-button" onClick={onOpenRoster}>
-          <span className="keep-roster-count">{wrights.length}</span>
-          <span className="keep-roster-text">
-            <span className="keep-roster-label">{demo ? "Example map" : "Session map"}</span>
-            {/*
-              * Counts with words, not two coloured dots. The same information
-              * has to survive a screenshot and a palette somebody cannot
-              * separate.
-              */}
-            <span className="keep-roster-detail">
-              {fixing} fixing · {building} building · {waiting} waiting
-            </span>
+      {/*
+        * The pedlar, on its own on the right edge, where a stall stands at the
+        * side of a road rather than in the middle of it.
+        */}
+      <div className="keep-corner is-right">
+        <button
+          type="button"
+          className="keep-panel keep-shop-button"
+          onClick={onOpenShop}
+          disabled={!shopOpen}
+          title={shopOpen ? "The pedlar" : "The pedlar calls from level 2"}
+        >
+          <span className="keep-shop-glyph" aria-hidden="true">⚖</span>
+          <span className="keep-shop-text">
+            <span className="keep-shop-label">Pedlar</span>
+            {!compact && (
+              <span className="keep-shop-detail">{shopOpen ? "Cosmetics" : "Level 2"}</span>
+            )}
           </span>
+          {shopOpen && <Opens />}
         </button>
       </div>
-      )}
+
+      {/*
+        * The kingdom and the road book together: how many are out, what they
+        * are doing, whether the line holds -- and the way to go and look.
+        */}
+      <div className="keep-corner is-bottom-right">
+        <div className="keep-panel keep-kingdom">
+          <button type="button" className="keep-kingdom-open" onClick={onOpenRoster}>
+            <span className="keep-operational-value">{sessionTotal.toLocaleString()}</span>
+            <span className="keep-kingdom-title">
+              <span className="keep-operational-label">
+                {demo ? "example sessions" : sessionTotal === 1 ? "active session" : "active sessions"}
+              </span>
+              <span className="keep-kingdom-map">{demo ? "Example map" : "Session map"}</span>
+            </span>
+            <Opens />
+          </button>
+          {!compact && (
+            <>
+              {/*
+                * Counts with words, not two coloured dots. The same information
+                * has to survive a screenshot and a palette somebody cannot
+                * separate.
+                */}
+              <p className="keep-operational-breakdown">
+                {fixing} fixing · {building} building · {waiting} waiting
+              </p>
+              <Muster strength={strength} real={real} />
+              <span className={`keep-data-state${demo ? " is-preview" : " is-live"}`}>
+                {dataState}
+              </span>
+            </>
+          )}
+        </div>
+      </div>
     </>
   );
 }

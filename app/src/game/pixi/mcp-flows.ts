@@ -2,12 +2,13 @@ import { Container, Graphics, Text } from "pixi.js";
 import { flowColor, FLOW_TTL_MS, type McpFlow } from "../state/mcp-flows";
 import type { Actor } from "../world/sim";
 import { toScreen } from "../world/iso";
+import { BODY_FONT, bodyText } from "./fonts";
 
 /** Static directed paths: no invented source actor and no motion requirement. */
 export class McpFlowLayer {
   private layer = new Container();
   private paths = new Graphics();
-  private source = new Text({text:"External MCP client", style:{fontFamily:"sans-serif",fontSize:20,fill:0xffffff,stroke:{color:0x15212c,width:4}}});
+  private source = new Text({text:bodyText("External MCP client"), style:{fontFamily:BODY_FONT,fontSize:20,fill:0xffffff,stroke:{color:0x15212c,width:4}}});
   private destroyed = false;
 
   constructor(parent: Container) {

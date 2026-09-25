@@ -134,3 +134,21 @@ export function plateCeiling(screenWidth: number): number {
   if (screenWidth <= 900) return 1.8;
   return 2.6;
 }
+
+/**
+ * How much a figure's health bar and a floating damage number are enlarged.
+ *
+ * Against the zoom, like the name boards, and never below their drawn size:
+ * a bar or a number is read at a glance from wherever the camera happens to
+ * be, and the far end of the zoom is exactly where a fight is being watched
+ * from. Close up they settle to their drawn size, because the figures there
+ * are large enough to carry them.
+ *
+ * `boost` lets the numbers go further than the bars. A number is on screen
+ * for under a second and is the only thing that says a blow landed; a bar
+ * stays put and would crowd the field at the same size.
+ */
+export function overlayScale(zoom: number, ceiling: number, boost = 1): number {
+  if (!(zoom > 0)) return 1;
+  return Math.min(ceiling * boost, Math.max(1, 1 / zoom));
+}

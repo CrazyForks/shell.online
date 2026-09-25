@@ -1,4 +1,5 @@
 import { GARRISONS, groundTiles, MAP, roadPaths } from "./marches";
+import { STRUCTURE_SCALE } from "./scale";
 import { campSites, CAMP_RADIUS } from "./camps";
 
 /**
@@ -69,7 +70,8 @@ const DEADFALL = ["Environment_04", "Environment_05"];
 
 /** How big each kind is drawn, against Kenney's buildings at their own size. */
 const SIZE = {
-  tree: { from: 0.75, to: 1.05 },
+  /* Trees stand over roofs, so they grow with the buildings. See world/scale.ts. */
+  tree: { from: 0.75 * STRUCTURE_SCALE, to: 1.05 * STRUCTURE_SCALE },
   scrub: { from: 0.4, to: 0.6 },
   deadfall: { from: 0.5, to: 0.75 },
   stone: { from: 0.45, to: 0.8 },

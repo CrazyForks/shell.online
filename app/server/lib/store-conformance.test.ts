@@ -1870,6 +1870,19 @@ for (const implementation of implementations) {
         expect(await store.claimCommands("dev_1", 2001)).toEqual([]);
       });
 
+      /*
+       * Every kind the union in types.ts names has to be accepted by the
+       * Postgres constraint too. "probe" was not, and the gathering failed in
+       * production with "internal error" while every in-memory test passed.
+       */
+      it("accepts every kind of command, including a gathering probe", async () => {
+        await store.putCommand(command({ id: "cmd_start", kind: "start" }));
+        await store.putCommand(command({ id: "cmd_kill", kind: "kill", command: undefined, sessionId: "s1" }));
+        await store.putCommand(command({ id: "cmd_probe", kind: "probe", command: undefined }));
+        const claimed = await store.claimCommands("dev_1", 2000);
+        expect(claimed.map((entry) => entry.kind).sort()).toEqual(["kill", "probe", "start"]);
+      });
+
       it("only hands a machine its own work", async () => {
         await store.putCommand(command());
         expect(await store.claimCommands("dev_2")).toEqual([]);

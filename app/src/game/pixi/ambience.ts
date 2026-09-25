@@ -2,6 +2,7 @@ import { Assets, Container, Graphics, Sprite, Texture } from "pixi.js";
 import { depthOf, toScreen } from "../world/iso";
 import { GARRISONS, groundTiles, MAP, type Ground } from "../world/marches";
 import type { Actor, Effect, Mark, Sim } from "../world/sim";
+import { overlayScale } from "../engine/zoom";
 
 /**
  * Everything that is there to be looked at rather than played.
@@ -20,7 +21,7 @@ import type { Actor, Effect, Mark, Sim } from "../world/sim";
  */
 
 /** Particle textures, vendored from Kenney's CC0 pack. See the notices file. */
-const FX_TEXTURES = ["fx-smoke_01", "fx-star_04", "fx-flare_01", "fx-spark_04", "fx-magic_05"];
+const FX_TEXTURES = ["fx-smoke_01", "fx-star_04", "fx-flare_01", "fx-spark_04", "fx-magic_05", "fx-light_01", "fx-circle_05"];
 
 export async function loadEffects(): Promise<Record<string, Texture>> {
   const loaded: Record<string, Texture> = {};
@@ -356,6 +357,17 @@ export class Blows {
     this.layer.zIndex = depthOf(MAP.width, MAP.height, 7_000);
   }
 
+  /** How much the numbers are enlarged at the current zoom. See `zoomed`. */
+  private numberScale = 1;
+
+  /**
+   * Told the zoom, so a number can still be read from far out. Boosted past
+   * the name boards' ceiling on purpose: see `overlayScale`.
+   */
+  zoomed(scale: number, ceiling: number): void {
+    this.numberScale = overlayScale(scale, ceiling, 1.5);
+  }
+
   sync(sim: Sim): void {
     const liveEffects = new Set<number>();
     for (const effect of sim.effects) {
@@ -392,7 +404,9 @@ export class Blows {
       }
       const progress = 1 - mark.life / mark.maxLife;
       const { x, y } = toScreen(mark.x, mark.y);
-      node.position.set(x, y - 30 - progress * 34);
+      /* Starts above an enlarged head and rises by more the larger it is drawn. */
+      node.scale.set(this.numberScale);
+      node.position.set(x, y - (60 + progress * 50) * this.numberScale);
       node.alpha = Math.min(1, (1 - progress) * 2.2);
     }
     for (const [id, node] of this.numbers) {

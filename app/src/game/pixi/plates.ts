@@ -1,6 +1,7 @@
 import { Container, Graphics, Text } from "pixi.js";
 import type { Actor } from "../world/sim";
 import { sigilFor, type Sigils } from "./sigils";
+import { BODY_FONT, bodyText } from "./fonts";
 
 /**
  * What stands above somebody's head.
@@ -45,7 +46,7 @@ export function atWork(actor: Actor, all: Actor[]): number {
   return busy / theirs.length;
 }
 
-const FONT = "ui-monospace, SFMono-Regular, Menlo, monospace";
+const FONT = BODY_FONT;
 
 export interface Plate {
   root: Container;
@@ -127,7 +128,7 @@ export function heroPlate(actor: Actor, yours: boolean): Plate {
   const root = new Container();
 
   const name = new Text({
-    text: actor.name.length > 20 ? `${actor.name.slice(0, 19)}…` : actor.name,
+    text: bodyText(actor.name.length > 20 ? `${actor.name.slice(0, 19)}…` : actor.name),
     style: {
       fontFamily: FONT,
       fontSize: 19,
@@ -193,7 +194,7 @@ export function soldierPlate(actor: Actor, sigils: Sigils): Plate {
   const root = new Container();
 
   const name = new Text({
-    text: actor.name.length > 24 ? `${actor.name.slice(0, 23)}…` : actor.name,
+    text: bodyText(actor.name.length > 24 ? `${actor.name.slice(0, 23)}…` : actor.name),
     style: { fontFamily: FONT, fontSize: 16, fill: 0xf0d9a8 },
   });
   name.anchor.set(0, 0.5);

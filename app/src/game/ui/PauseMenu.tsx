@@ -10,16 +10,20 @@ import { useGameShell } from "../state/context";
 import { Codex } from "./Codex";
 import { Barrow } from "./Barrow";
 import { Gathering } from "./Gathering";
-import { Marches } from "./Marches";
 import { Menu, type MenuItem } from "./Menu";
 import { OptionsPanel } from "./OptionsPanel";
 import { Prompt } from "./Prompt";
-import { Shop } from "./Shop";
 
-type Pane = "root" | "marches" | "barrow" | "gathering" | "options" | "shop" | "codex";
+type Pane = "root" | "barrow" | "gathering" | "options" | "codex";
 
 /**
  * The pause screen, and everything reached from it.
+ *
+ * Kept short on purpose. The pedlar and the road book used to live here as
+ * well, and reaching either meant stopping the game to go through a menu; both
+ * now open straight from their own places on the HUD (see KeepSheet), and this
+ * is left with what belongs to stopping: resuming, the record, the guide, the
+ * settings and the way out.
  *
  * The field carries four numbers and nothing else; everything a player might
  * want but does not need at a glance lives behind this. That is the whole
@@ -34,46 +38,28 @@ export function PauseMenu({
   onResume,
   purse,
   characterClass,
-  wearing,
-  livery,
-  shopOpen,
   elixir,
   garrison,
-  onBuy,
-  onWear,
-  onTravel,
   gathering,
   onGathering,
   earned,
   counted,
-  openAt,
 }: {
   onResume: () => void;
   purse: Purse;
   characterClass: string;
-  wearing: string;
-  /** What this player's soldiers are wearing. */
-  livery: string;
-  /** The pedlar starts calling at level two; before that the row says so. */
-  shopOpen: boolean;
   /** Tokens the gathering has spent, and who is on the field. */
   elixir: number;
   garrison: number;
-  onBuy: (skinId: string) => void;
-  onWear: (skinId: string) => void;
-  /** Rides to a holding and closes the menu. The map is too big to walk. */
-  onTravel: (garrisonId: string) => void;
   /** Whether the account has agreed to its machines being read. */
   gathering: boolean;
   onGathering: (on: boolean) => void;
   /** What the finished sessions came to, for the Barrow. */
   earned: Earned;
   counted: boolean;
-  /** Which pane to open on, so the vial can lead straight to the bill. */
-  openAt?: "gathering" | "marches";
 }) {
   const navigate = useNavigate();
-  const [pane, setPane] = useState<Pane>(openAt ?? "root");
+  const [pane, setPane] = useState<Pane>("root");
   const { options } = useGameShell();
   const dialog = useRef<HTMLDialogElement>(null);
   const panel = useRef<HTMLDivElement>(null);
@@ -140,27 +126,12 @@ export function PauseMenu({
       onSelect: onResume,
     },
     {
-      id: "marches",
-      label: "Map & holdings",
-      detail: "The Marches — find active work",
-      onSelect: () => setPane("marches"),
-    },
-    {
       id: "barrow",
       label: "Completed work",
       detail: counted
         ? `The Barrow — ${earned.sessions.toLocaleString()} completed sessions`
         : "The Barrow — not counted yet",
       onSelect: () => setPane("barrow"),
-    },
-    {
-      id: "shop",
-      label: "Cosmetics",
-      detail: shopOpen
-        ? `The Pedlar — ${purse.marks.toLocaleString()} marks to spend`
-        : "The Pedlar — unlocks at level 2",
-      disabled: !shopOpen,
-      onSelect: () => setPane("shop"),
     },
     {
       id: "gathering",
@@ -193,11 +164,9 @@ export function PauseMenu({
 
   const TITLES: Record<Pane, string> = {
     root: "Paused",
-    marches: "The Marches",
     barrow: "The Barrow",
     gathering: "The gathering",
     options: "Options",
-    shop: "The pedlar",
     codex: "The Chronicle",
   };
   const title = TITLES[pane];
@@ -257,15 +226,6 @@ export function PauseMenu({
             }}
           />
         )}
-        {pane === "marches" && (
-          <Marches
-            onTravel={(id) => {
-              onTravel(id);
-              onResume();
-            }}
-            onBack={() => setPane("root")}
-          />
-        )}
         {pane === "barrow" && (
           <Barrow earned={earned} counted={counted} onBack={() => setPane("root")} />
         )}
@@ -279,17 +239,6 @@ export function PauseMenu({
           />
         )}
         {pane === "options" && <OptionsPanel onBack={() => setPane("root")} />}
-        {pane === "shop" && (
-          <Shop
-            purse={purse}
-            characterClass={characterClass}
-            wearing={wearing}
-            livery={livery}
-            onBuy={onBuy}
-            onWear={onWear}
-            onBack={() => setPane("root")}
-          />
-        )}
         {pane === "codex" && <Codex onBack={() => setPane("root")} />}
 
         <footer className="keep-pause-foot">

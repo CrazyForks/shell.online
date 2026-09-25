@@ -140,8 +140,12 @@
    * to read across a room, and legibility is the rule this file is held to.
    * The uppercase and the letter-spacing do the period work instead.
    */
-  --keep-font: ui-monospace, "SFMono-Regular", "SF Mono", Menlo, Consolas,
-    "Liberation Mono", monospace;
+  /*
+   * One medieval face for everything: Pirata One, the blackletter the titles
+   * and signs were already set in. Body text is set in its lowercase (see the
+   * rule on .keep below); titles and labels keep their capitals.
+   */
+  --keep-font: "Pirata One", Georgia, serif;
 
   position: fixed;
   inset: 0;
@@ -153,8 +157,38 @@
   font-family: var(--keep-font);
   font-size: var(--keep-text);
   line-height: 1.45;
+  /*
+   * Body text in the blackletter's lowercase, which is where it reads as a
+   * hand rather than a headline. Anything set in capitals on purpose -- a
+   * title, a label -- says so with its own text-transform and keeps them.
+   */
+  text-transform: lowercase;
   -webkit-font-smoothing: none;
   font-smooth: never;
+}
+
+/*
+ * What a person typed, and what a machine will run, is shown as it is. A
+ * command lowercased on screen is a different command from the one sent.
+ */
+.keep :is(input, textarea, select, option, code, kbd) {
+  text-transform: none;
+}
+
+/*
+ * Buttons take the lowercase too. The browser's own stylesheet gives them
+ * `text-transform: none`, so a menu's second line stayed in sentence case
+ * beside every other sentence. `:where` keeps this at no specificity, so any
+ * class that sets capitals on purpose still wins.
+ */
+:where(.keep) :where(button) {
+  text-transform: inherit;
+}
+
+/* A crest is an initial, and a key cap names a key: both stay capitals. */
+.keep .keep-crest-letter,
+.keep .keep-key {
+  text-transform: uppercase;
 }
 
 /*
@@ -2372,7 +2406,13 @@
   min-height: var(--keep-hit);
   padding: 0;
   font-size: var(--keep-text-xl);
-  /* A glyph, not a word: no tracking, and centred in its own square. */
+  /*
+   * A glyph, not a word: no tracking, and centred in its own square. Set in a
+   * system face, because the blackletter's plus and minus are drawn for a line
+   * of text and came out as specks in a square this size.
+   */
+  font-family: ui-sans-serif, system-ui, sans-serif;
+  font-weight: 700;
   letter-spacing: 0;
   line-height: 1;
 }
@@ -2618,6 +2658,613 @@
 .keep-assess-error { color: var(--keep-blood); }
 .keep-assess-list { list-style: none; margin: var(--keep-space) 0 0; padding: 0; }
 .keep-assess-list li { display: flex; flex-wrap: wrap; gap: var(--keep-space); align-items: baseline; margin-top: var(--keep-space); }
-.keep-assess-session { font-family: monospace; font-size: var(--keep-text-sm); opacity: 0.8; }
+.keep-assess-session { font-family: var(--keep-font); font-size: var(--keep-text-sm); opacity: 0.8; }
 .keep-assess-chip { border: 1px solid color-mix(in srgb, var(--keep-arcane) 55%, transparent); border-radius: 999px; padding: 0 6px; font-size: var(--keep-text-sm); }
 .keep-assess-age, .keep-assess-inferred { font-size: var(--keep-text-sm); opacity: 0.8; }
+
+/*
+ * The pointer: a gauntlet rather than the system arrow.
+ *
+ * Only where there is a pointer to draw. A finger on glass has no cursor, and
+ * a rule that set one would do nothing there except load two files, so the
+ * whole block sits behind `pointer: fine`.
+ *
+ * The hotspot is the fingertip, (10, 1) in the 32-pixel drawing; see the
+ * comment in glove.svg. Anything that can be pressed wears the gilded one, so
+ * a control says so before it is clicked, and the system cursor is the
+ * fallback if the file does not arrive.
+ */
+@media (pointer: fine) {
+  .keep,
+  .keep * {
+    cursor: url("/game/ui/glove.svg") 10 1, default;
+  }
+
+  .keep :is(button, a[href], summary, label, select, [role="button"], [role="option"], input[type="range"], input[type="radio"], input[type="checkbox"]):not(:disabled) {
+    cursor: url("/game/ui/glove-hover.svg") 10 1, pointer;
+  }
+
+  .keep :is(input[type="text"], input[type="search"], input:not([type]), textarea) {
+    cursor: text;
+  }
+
+  .keep :disabled {
+    cursor: not-allowed;
+  }
+}
+
+/* ---- the HUD, rearranged ------------------------------------------------ */
+
+/*
+ * The arrow every HUD element that opens something carries.
+ *
+ * One mark, in brass, pushed to the far edge of whatever it sits in, so
+ * "this opens" reads the same on the vial, the pedlar, the kingdom and a row
+ * in the list of sessions. Things that only show a number do not have it.
+ */
+.keep-opens {
+  margin-left: auto;
+  padding-left: var(--keep-space);
+  color: var(--keep-brass);
+  font-family: ui-sans-serif, system-ui, sans-serif;
+  font-size: var(--keep-text-lg);
+  line-height: 1;
+  transition: transform var(--keep-fast) linear;
+}
+
+:is(button, a):hover > .keep-opens,
+:is(button, a):focus-visible > .keep-opens {
+  transform: translateX(calc(3px * var(--keep-scale)));
+}
+
+/*
+ * Top left: the player, and their own sessions.
+ *
+ * The panel is the size it was. The list scrolls inside it rather than growing
+ * it, so twenty sessions cost the map nothing more than two.
+ */
+.keep-standing {
+  width: calc(320px * var(--keep-scale));
+}
+
+.keep-yours {
+  display: flex;
+  min-height: 0;
+  flex-direction: column;
+  gap: calc(var(--keep-space) / 2);
+}
+
+.keep-yours-head {
+  display: flex;
+  align-items: baseline;
+  margin: 0;
+  gap: var(--keep-space);
+  color: var(--keep-parchment);
+  font-size: var(--keep-text);
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.keep-yours-count {
+  color: var(--keep-gold);
+}
+
+.keep-yours-empty {
+  margin: 0;
+  color: var(--keep-mist);
+  font-size: var(--keep-text-sm);
+}
+
+.keep-yours-list {
+  max-height: calc(152px * var(--keep-scale));
+  margin: 0;
+  padding: 0 calc(4px * var(--keep-scale)) 0 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  list-style: none;
+  scrollbar-color: var(--keep-brass-dim) var(--keep-stone-dark);
+  scrollbar-width: thin;
+}
+
+.keep-yours-row {
+  display: flex;
+  width: 100%;
+  min-height: calc(44px * var(--keep-scale));
+  align-items: center;
+  padding: 0 var(--keep-space);
+  gap: var(--keep-space);
+  border: 0;
+  border-bottom: 1px solid var(--keep-stone-dark);
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  transition: background var(--keep-fast) linear;
+}
+
+.keep-yours-row:hover,
+.keep-yours-row:focus-visible {
+  background: var(--keep-stone-lit);
+}
+
+.keep-yours-dot {
+  width: calc(10px * var(--keep-scale));
+  height: calc(10px * var(--keep-scale));
+  flex: none;
+  border-radius: 50%;
+  background: var(--keep-mist);
+}
+
+.keep-yours-dot.is-bug {
+  background: var(--keep-blood);
+}
+
+.keep-yours-dot.is-feature {
+  background: var(--keep-gold);
+}
+
+.keep-yours-name {
+  min-width: 0;
+  overflow: hidden;
+  font-size: var(--keep-text);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.keep-yours-work {
+  flex: none;
+  color: var(--keep-mist);
+  font-size: var(--keep-text-sm);
+}
+
+/* Top right: what the player has, and the pause button, in one row. */
+.keep-corner.keep-wealth {
+  flex-direction: row;
+  align-items: stretch;
+}
+
+.keep-wealth > .keep-panel,
+.keep-wealth > .keep-button {
+  display: flex;
+  align-items: center;
+}
+
+/* The right edge: the pedlar, on its own. */
+.keep-shop-button {
+  display: flex;
+  min-height: var(--keep-hit);
+  align-items: center;
+  gap: var(--keep-space);
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  transition: background var(--keep-fast) linear;
+}
+
+.keep-shop-button:hover:not(:disabled) {
+  background: var(--keep-stone-lit);
+}
+
+.keep-shop-button:disabled {
+  opacity: 0.6;
+}
+
+.keep-shop-glyph {
+  color: var(--keep-gold);
+  font-family: ui-sans-serif, system-ui, sans-serif;
+  font-size: var(--keep-text-xl);
+  line-height: 1;
+}
+
+.keep-shop-text {
+  display: flex;
+  flex-direction: column;
+}
+
+.keep-shop-label {
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.keep-shop-detail {
+  color: var(--keep-mist);
+  font-size: var(--keep-text-sm);
+}
+
+/* Bottom right: the kingdom, and the way into the road book. */
+.keep-kingdom {
+  display: flex;
+  width: calc(340px * var(--keep-scale));
+  flex-direction: column;
+  gap: calc(var(--keep-space) / 2);
+}
+
+.keep-kingdom-open {
+  display: flex;
+  min-height: var(--keep-hit);
+  align-items: center;
+  margin: calc(var(--keep-space) * -1) calc(var(--keep-space) * -1) 0;
+  padding: calc(var(--keep-space) / 2) var(--keep-space);
+  gap: var(--keep-space-2);
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  transition: background var(--keep-fast) linear;
+}
+
+.keep-kingdom-open:hover,
+.keep-kingdom-open:focus-visible {
+  background: var(--keep-stone-lit);
+}
+
+.keep-kingdom-title {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+}
+
+.keep-kingdom-map {
+  color: var(--keep-gold);
+  font-size: var(--keep-text-sm);
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.keep-kingdom .keep-muster {
+  margin: 0;
+}
+
+/* The sheets opened off the field: the pause menu's frame, with a close. */
+.keep-sheet .keep-pause-head {
+  justify-content: space-between;
+}
+
+.keep-sheet-close {
+  width: var(--keep-hit);
+  min-width: var(--keep-hit);
+  padding: 0;
+  font-family: ui-sans-serif, system-ui, sans-serif;
+  letter-spacing: 0;
+}
+
+/*
+ * Handsets.
+ *
+ * The old phone HUD dropped every corner but one; now each corner keeps its
+ * job and loses its words. What is read rather than glanced at -- the muster,
+ * the breakdown, the pedlar's second line -- is left out of the tree by the
+ * HUD itself, so nothing here is claiming to be readable at a size it is not.
+ */
+.keep[data-layout="phone"] .keep-standing-head,
+.keep[data-layout="phone"] .keep-standing > .keep-meter,
+.keep[data-layout="phone"] .keep-standing-divider {
+  display: flex;
+}
+
+.keep[data-layout="phone"] .keep-standing-divider {
+  display: block;
+}
+
+.keep[data-layout="phone"] .keep-standing,
+.keep[data-layout="snug"] .keep-standing {
+  width: min(62vw, calc(260px * var(--keep-scale)));
+}
+
+.keep[data-layout="phone"] .keep-crest {
+  display: none;
+}
+
+.keep[data-layout="phone"] .keep-yours-list {
+  max-height: calc(96px * var(--keep-scale));
+}
+
+.keep[data-layout="phone"] .keep-purse-label,
+.keep[data-layout="phone"] .keep-elixir-label {
+  display: none;
+}
+
+.keep[data-layout="phone"] .keep-vial {
+  display: none;
+}
+
+.keep[data-layout="phone"] .keep-kingdom {
+  width: auto;
+}
+
+.keep[data-layout="phone"] .keep-kingdom-open {
+  margin: calc(var(--keep-space) * -1);
+}
+
+.keep[data-layout="phone"] .keep-kingdom .keep-operational-label {
+  display: none;
+}
+
+/* The shop stays mid-edge on a handset; only the zoom goes to the foot. */
+.keep[data-layout="phone"] .keep-corner.is-right {
+  top: 50%;
+  bottom: auto;
+  transform: translateY(-50%);
+}
+
+.keep[data-layout="phone"][data-card="open"] .keep-corner.is-right {
+  right: var(--keep-safe-right);
+  bottom: auto;
+}
+
+@media (width <= 640px) {
+  .keep-purse,
+  .keep-elixir-panel {
+    display: flex;
+  }
+}
+
+/*
+ * Bottom left: the zoom, in a row along the foot, now that the right edge is
+ * the pedlar's. The optional analysis panel, which used to have this corner to
+ * itself, stands on top of the row rather than underneath it.
+ */
+.keep-corner.is-bottom-left .keep-zoom {
+  flex-direction: row;
+}
+
+.keep-assess {
+  bottom: calc(var(--keep-safe-bottom) + var(--keep-hit) + var(--keep-space));
+}
+
+/* The arrow is a glyph, and needs to be as large as the words beside it. */
+.keep-opens {
+  font-size: var(--keep-text-xl);
+}
+
+/*
+ * Handsets, tightened.
+ *
+ * Held sideways a phone is under four hundred pixels tall, so the player's
+ * panel drops the words around the experience bar and shows two rows of
+ * sessions; the bar and the list are what is looked at. Held upright it is
+ * too narrow for the player's panel and the purse to share the top edge, so
+ * the panel steps down below the row of purse, vial and pause.
+ */
+.keep[data-layout="phone"] .keep-standing .keep-meter-head,
+.keep[data-layout="phone"] .keep-standing .keep-meter-detail {
+  display: none;
+}
+
+.keep[data-layout="phone"] .keep-standing-class {
+  font-size: var(--keep-text-lg);
+}
+
+.keep[data-layout="phone"] .keep-standing-level {
+  font-size: var(--keep-text-sm);
+}
+
+.keep[data-layout="phone"] .keep-yours-list {
+  max-height: calc(88px * var(--keep-scale));
+}
+
+@media (orientation: portrait) {
+  .keep[data-layout="phone"] .keep-corner.is-top-left {
+    top: calc(var(--keep-safe-top) + var(--keep-hit) + var(--keep-space-2));
+  }
+
+  .keep[data-layout="phone"] .keep-standing {
+    width: min(78vw, calc(300px * var(--keep-scale)));
+  }
+
+  /*
+   * Upright, the foot is one panel wide: the kingdom keeps it, the zoom row
+   * stands on top of the kingdom, and the analysis panel on top of that.
+   */
+  .keep[data-layout="phone"] .keep-corner.is-bottom-left {
+    bottom: calc(var(--keep-safe-bottom) + var(--keep-hit) + var(--keep-space-3));
+  }
+
+  .keep[data-layout="phone"] .keep-assess {
+    bottom: calc(var(--keep-safe-bottom) + var(--keep-hit) * 2 + var(--keep-space-4) + var(--keep-space));
+  }
+}
+
+@media (orientation: landscape) {
+  /* Sideways there is width to spare: the analysis panel sits beside the zoom. */
+  .keep[data-layout="phone"] .keep-assess {
+    bottom: var(--keep-safe-bottom);
+    left: calc(var(--keep-safe-left) + var(--keep-hit) * 3 + var(--keep-space-3));
+    width: min(260px, 30vw);
+  }
+}
+
+/* ---- the Forge's training yard -------------------------------------------- */
+
+/*
+ * A button standing on the map at the Forge.
+ *
+ * Positioned and scaled by the scene every frame (see `onForge` in
+ * GameRoute), from the top-left corner of the field, so the transform is the
+ * whole of its placement. Never smaller than the 44-pixel floor at the
+ * smallest scale the scene asks for.
+ */
+.keep-forge-train {
+  display: flex;
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: var(--keep-z-hud);
+  min-height: calc(56px * var(--keep-scale));
+  align-items: center;
+  padding: var(--keep-space) var(--keep-space-2);
+  gap: var(--keep-space);
+  border: 3px solid var(--keep-brass);
+  border-radius: calc(8px * var(--keep-scale));
+  background: linear-gradient(180deg, #4a3a22, var(--keep-stone));
+  box-shadow:
+    0 0 0 2px var(--keep-stone-dark),
+    0 calc(6px * var(--keep-scale)) calc(18px * var(--keep-scale)) rgb(0 0 0 / 55%),
+    0 0 calc(22px * var(--keep-scale)) rgb(255 200 97 / 35%);
+  color: var(--keep-parchment);
+  font: inherit;
+  text-align: left;
+  transform-origin: 50% 50%;
+  pointer-events: auto;
+  touch-action: manipulation;
+  will-change: transform;
+}
+
+.keep-forge-train:hover,
+.keep-forge-train:focus-visible {
+  background: linear-gradient(180deg, #5c4829, var(--keep-stone-lit));
+  box-shadow:
+    0 0 0 2px var(--keep-stone-dark),
+    0 0 calc(30px * var(--keep-scale)) rgb(255 210 122 / 60%);
+}
+
+.keep-forge-train-glyph {
+  color: var(--keep-gold);
+  font-family: ui-sans-serif, system-ui, sans-serif;
+  font-size: var(--keep-text-xl);
+  line-height: 1;
+}
+
+.keep-forge-train-text {
+  display: flex;
+  flex-direction: column;
+}
+
+.keep-forge-train-label {
+  font-size: var(--keep-text-lg);
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.keep-forge-train-detail {
+  max-width: calc(200px * var(--keep-scale));
+  overflow: hidden;
+  color: var(--keep-mist);
+  font-size: var(--keep-text-sm);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/*
+ * While a recruit is on the way, the button burns with the beacon behind it.
+ *
+ * Held rather than pulsed: interface motion stays under the 300ms ceiling
+ * check-game-ui holds, and the beacon on the canvas is already doing the
+ * moving -- the button only has to say which state it is in.
+ */
+.keep-forge-train.is-training {
+  border-color: #ffd27a;
+  box-shadow:
+    0 0 0 2px var(--keep-stone-dark),
+    0 0 calc(30px * var(--keep-scale)) rgb(255 210 122 / 80%);
+}
+
+/* The training form, in the sheet. */
+.keep-train {
+  display: flex;
+  flex-direction: column;
+  gap: var(--keep-space-2);
+}
+
+.keep-train-select,
+.keep-train-field input {
+  min-height: var(--keep-hit);
+  padding: 0 var(--keep-space);
+  border: 2px solid var(--keep-brass-dim);
+  background: var(--keep-stone-dark);
+  color: var(--keep-parchment);
+  font: inherit;
+}
+
+.keep-train-field {
+  display: flex;
+  flex-direction: column;
+  gap: calc(var(--keep-space) / 2);
+}
+
+.keep-train-kinds {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(calc(200px * var(--keep-scale)), 1fr));
+  gap: var(--keep-space);
+}
+
+.keep-train-kind {
+  display: flex;
+  min-height: var(--keep-hit);
+  align-items: flex-start;
+  padding: var(--keep-space);
+  gap: var(--keep-space);
+  border: 2px solid var(--keep-stone-dark);
+}
+
+.keep-train-kind:has(input:checked) {
+  border-color: var(--keep-brass);
+  background: var(--keep-stone-lit);
+}
+
+.keep-train-kind-text {
+  display: flex;
+  flex-direction: column;
+}
+
+.keep-train-kind-title {
+  font-weight: 700;
+}
+
+.keep-train-kind-blurb,
+.keep-train-note {
+  margin: 0;
+  color: var(--keep-mist);
+  font-size: var(--keep-text-sm);
+}
+
+.keep-train-error {
+  margin: 0;
+  color: var(--keep-blood);
+}
+
+.keep-train-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--keep-space);
+}
+
+.keep-train-go {
+  border-color: var(--keep-brass);
+}
+
+/* ---- touch -------------------------------------------------------------- */
+
+/*
+ * The whole keep is a game surface, not a page.
+ *
+ * The canvas already refuses the browser's own gestures; the HUD over it did
+ * not, so a pan or a pinch that began on a panel, a label or the gap between
+ * two of them scrolled or zoomed the page rather than the map -- and a double
+ * tap on a button zoomed the page in. Nothing here is text to be selected or
+ * held for a callout either. The panes that do scroll say so below.
+ */
+.keep {
+  overscroll-behavior: none;
+  touch-action: none;
+  -webkit-tap-highlight-color: transparent;
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+.keep :is(.keep-yours-list, .keep-pause-panel, .keep-wright, .keep-mcp-flows, .keep-assess, .keep-opening) {
+  touch-action: pan-y;
+}
+
+.keep :is(input, textarea, select) {
+  touch-action: manipulation;
+  -webkit-user-select: text;
+  user-select: text;
+}

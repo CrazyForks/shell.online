@@ -1,0 +1,36 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32" shape-rendering="crispEdges">
+  <!--
+    Over something that can be pressed: the same gauntlet, lit gold, so a
+    control announces itself before it is clicked. The hotspot is the
+    fingertip, at (10, 1); the rule that says so is in game.css, and a cursor
+    whose hotspot is anywhere else clicks somewhere other than where it points.
+    Steel with a brass cuff, outlined dark, so it reads on grass and on stone.
+  -->
+  <g stroke="#241d15" stroke-width="1.5" stroke-linejoin="round">
+    <!-- the three folded fingers, back to front -->
+    <rect x="20.5" y="12.5" width="4.5" height="7" rx="1.5" fill="#c2a15e"/>
+    <rect x="16.5" y="11.5" width="4.5" height="7.5" rx="1.5" fill="#d9bd7f"/>
+    <rect x="12.5" y="10.5" width="4.5" height="8" rx="1.5" fill="#f0d9a8"/>
+    <!-- the palm plate -->
+    <path d="M6 16 L25 16 L25 24 Q25 26 23 26 L9 26 Q6 26 6 23 Z" fill="#f0d9a8"/>
+    <!-- the thumb, folded across -->
+    <path d="M2.5 15 L7 14 L11 19 L8.5 21.5 Z" fill="#d9bd7f"/>
+    <!-- the raised finger, in three plates -->
+    <path d="M7.5 16 L7.5 3.5 Q7.5 0.75 10 0.75 Q12.5 0.75 12.5 3.5 L12.5 16 Z" fill="#fff1c4"/>
+    <!-- the cuff -->
+    <rect x="7.5" y="25.5" width="17" height="5.5" rx="1" fill="#ffd27a"/>
+  </g>
+  <!-- the joints on the raised finger, and the rivets on the cuff -->
+  <g fill="#6b7580">
+    <rect x="8.75" y="6" width="2.5" height="1"/>
+    <rect x="8.75" y="10.5" width="2.5" height="1"/>
+    <rect x="13.5" y="14.5" width="2.5" height="1"/>
+    <rect x="17.5" y="15" width="2.5" height="1"/>
+    <rect x="21.5" y="15.5" width="2.5" height="1"/>
+  </g>
+  <g fill="#7a5418">
+    <rect x="10" y="27.5" width="1.5" height="1.5"/>
+    <rect x="15.25" y="27.5" width="1.5" height="1.5"/>
+    <rect x="20.5" y="27.5" width="1.5" height="1.5"/>
+  </g>
+</svg>

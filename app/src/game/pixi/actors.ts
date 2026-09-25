@@ -5,6 +5,8 @@ import { makeUnmade, walkUnmade, type Unmade } from "./unmade";
 import { depthOf, TILE_H, toScreen } from "../world/iso";
 import type { Loaded } from "./scene";
 import type { Actor, Sim } from "../world/sim";
+import { ACTOR_SCALE } from "../world/scale";
+import { overlayScale } from "../engine/zoom";
 
 /**
  * The people on the map, and the things that got in.
@@ -18,7 +20,7 @@ import type { Actor, Sim } from "../world/sim";
 import { UNIT_FOR } from "./units";
 
 /** How much bigger than drawn a soldier is. See `make`. */
-const FIGURE = 1.85;
+const FIGURE = 1.85 * ACTOR_SCALE;
 
 /**
  * And how much bigger the Unmade are drawn than they are built.
@@ -33,7 +35,7 @@ const FIGURE = 1.85;
  * for a courtyard and useless here. The three builds keep their proportions to
  * each other, so a mite is still a mite next to a heisenbug.
  */
-const UNMADE = 1.9;
+const UNMADE = 1.9 * ACTOR_SCALE;
 
 /**
  * How much bigger again a hero is.
@@ -48,7 +50,7 @@ const UNMADE = 1.9;
  * a hundred and twenty-eight tiles across, and a figure sized for a courtyard
  * is a speck on it.
  */
-const HERO = 3.1;
+const HERO = 3.1 * ACTOR_SCALE;
 
 /** A small deterministic offset, so two bugs do not step in lockstep. */
 function hashOf(id: string): number {
@@ -97,6 +99,26 @@ function lift(id: string): number {
  * what they collide with, so the fix is to put them over the top of it.
  */
 const HERO_LIFT = 6 * 36 + 24;
+
+/**
+ * A health bar, in the figure's own pixels before the zoom enlarges it.
+ *
+ * Wide and thick enough to read at a glance: the old bar was twenty-six by
+ * four, which zoomed out was a smudge. Enemies bleed red and the garrison's
+ * own green, so which side is losing reads before the length of either does.
+ * Drawn upward from its anchor, so enlarging it lifts it clear of the head
+ * rather than growing down into the face.
+ */
+const BAR_W = 56;
+const BAR_H = 10;
+function drawBar(bar: Graphics, fraction: number, enemy: boolean): void {
+  bar.clear();
+  bar.rect(-BAR_W / 2, -BAR_H, BAR_W, BAR_H).fill({ color: 0x1a1008, alpha: 0.9 });
+  bar
+    .rect(-BAR_W / 2 + 2, -BAR_H + 2, (BAR_W - 4) * Math.max(0, Math.min(1, fraction)), BAR_H - 4)
+    .fill({ color: enemy ? 0xe0453a : 0x8fd05a });
+  bar.rect(-BAR_W / 2, -BAR_H, BAR_W, BAR_H).stroke({ color: 0xf0d9a8, width: 1.5, alpha: 0.7 });
+}
 
 interface Piece {
   root: Container;
@@ -149,6 +171,8 @@ export class ActorLayer {
 
   /** The last zoom the plates were sized for; see `zoomed`. */
   private plateScale = 1;
+  /** And the health bars, which grow against the zoom as well. */
+  private barScale = 1;
 
   /** Called when a skin or a livery is bought or changed in the shop. */
   wear(skin: number, livery: number): void {
@@ -182,6 +206,7 @@ export class ActorLayer {
      * across a phone, and a map behind its own labels is not a map.
      */
     this.plateScale = Math.min(ceiling, Math.max(0.75, 1 / scale));
+    this.barScale = overlayScale(scale, ceiling);
     /*
      * Every board is shown at every zoom the wheel allows, heroes and soldiers
      * alike. A dozen of them over one camp do interleave; the answer to that is
@@ -189,6 +214,7 @@ export class ActorLayer {
      * exactly the distance you need them.
      */
     for (const piece of this.pieces.values()) {
+      piece.bar.scale.set(this.barScale);
       if (!piece.plate) continue;
       piece.plate.root.scale.set(this.plateScale);
     }
@@ -200,7 +226,7 @@ export class ActorLayer {
 
     const shadow = new Graphics();
     shadow
-      .ellipse(0, 0, (16 * size) / FIGURE, (7 * size) / FIGURE)
+      .ellipse(0, 0, (16 * size * ACTOR_SCALE) / FIGURE, (7 * size * ACTOR_SCALE) / FIGURE)
       .fill({ color: 0x1a1008, alpha: 0.32 });
     root.addChild(shadow);
 
@@ -209,12 +235,16 @@ export class ActorLayer {
       bug.root.scale.set(UNMADE);
       bug.root.position.set(0, TILE_H * 0.25);
       root.addChild(bug.root);
-      /* The shadow grows with what casts it, or the creature floats. */
-      shadow.scale.set(UNMADE);
+      /*
+       * The shadow grows with what casts it, or the creature floats. Less the
+       * field's own enlargement, which the ellipse above already carries.
+       */
+      shadow.scale.set(UNMADE / ACTOR_SCALE);
 
       /* Health over the creature, shown only once something is off it. */
       const hurt = new Graphics();
       hurt.position.set(0, -24 * UNMADE);
+      hurt.scale.set(this.barScale);
       hurt.visible = false;
       root.addChild(hurt);
 
@@ -257,6 +287,7 @@ export class ActorLayer {
      */
     const bar = new Graphics();
     bar.position.set(0, -sprite.height - 4);
+    bar.scale.set(this.barScale);
     bar.visible = false;
     if (actor.role !== "hero") root.addChild(bar);
 
@@ -331,15 +362,16 @@ export class ActorLayer {
    * The topmost match wins, which for an isometric map means the one drawn
    * last -- the figure actually on top where they overlap.
    */
-  hit(x: number, y: number, pickable: (id: string) => boolean): string | undefined {
+  hit(x: number, y: number, pickable: (id: string) => boolean, pad = 0): string | undefined {
     let found: string | undefined;
     let bestDepth = -Infinity;
 
     for (const [id, piece] of this.pieces) {
       if (!pickable(id)) continue;
       const foot = piece.root.y + TILE_H * 0.25;
-      if (x < piece.root.x - piece.halfWidth || x > piece.root.x + piece.halfWidth) continue;
-      if (y > foot + 6 || y < foot - piece.rise) continue;
+      /* `pad` is the slop a fingertip is allowed, in world units. See engine/tap.ts. */
+      if (x < piece.root.x - piece.halfWidth - pad || x > piece.root.x + piece.halfWidth + pad) continue;
+      if (y > foot + 6 + pad || y < foot - piece.rise - pad) continue;
       if (piece.root.zIndex <= bestDepth) continue;
       bestDepth = piece.root.zIndex;
       found = id;
@@ -398,8 +430,8 @@ export class ActorLayer {
        * better than a static figure with a number popping off it.
        */
       const lunging = actor.action === "attack";
-      piece.figure.position.x = lunging ? actor.facing * 5 : 0;
-      piece.figure.position.y = TILE_H * 0.25 + (actor.moving ? Math.sin(sim.clock / 3) * 1.5 : 0);
+      piece.figure.position.x = lunging ? actor.facing * 5 * ACTOR_SCALE : 0;
+      piece.figure.position.y = TILE_H * 0.25 + (actor.moving ? Math.sin(sim.clock / 3) * 1.5 * ACTOR_SCALE : 0);
 
       /* Six legs, walking in alternating tripods, which is how insects walk. */
       if (piece.bug) walkUnmade(piece.bug, sim.clock / 2.6 + hashOf(actor.id), actor.moving);
@@ -429,13 +461,7 @@ export class ActorLayer {
         piece.lastHp = actor.hp;
         const hurt = actor.hp < actor.maxHp && actor.role !== "hero";
         piece.bar.visible = hurt;
-        if (hurt) {
-          piece.bar.clear();
-          piece.bar.rect(-13, 0, 26, 4).fill({ color: 0x1a1008, alpha: 0.85 });
-          piece.bar
-            .rect(-12, 1, 24 * Math.max(0, actor.hp / actor.maxHp), 2)
-            .fill({ color: actor.side === "unmade" ? 0x48d6c0 : 0x8fd05a });
-        }
+        if (hurt) drawBar(piece.bar, actor.hp / actor.maxHp, actor.side === "unmade");
       }
 
       if (piece.plate) {

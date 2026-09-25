@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { GARRISONS, groundTiles, MAP } from "./marches";
 import { scatterProps, WOODS } from "./scatter";
+import { STRUCTURE_SCALE } from "./scale";
 
 /**
  * The woods, checked for the things that would look like bugs.
@@ -107,7 +108,7 @@ describe("how it is placed", () => {
     expect(new Set(scales).size).toBeGreaterThan(20);
     for (const scale of scales) {
       expect(scale).toBeGreaterThan(0.2);
-      expect(scale).toBeLessThan(1.5);
+      expect(scale).toBeLessThan(1.5 * STRUCTURE_SCALE);
     }
   });
 

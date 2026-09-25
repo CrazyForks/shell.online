@@ -9,6 +9,8 @@ import { buildBridges } from "./bridge";
 import { buildScatter } from "./scatter";
 import { buildRoadside, type Lanterns } from "./roadside";
 import { headroom, openingZoom, zoomBounds } from "../engine/zoom";
+import { builtAt, STRUCTURE_SCALE } from "../world/scale";
+import { BODY_FONT, bodyText } from "./fonts";
 
 /**
  * Everything standing on the ground: buildings, signs, trees, and the people.
@@ -163,7 +165,8 @@ export function standing(
    */
   const sprite = new Sprite(texture);
   sprite.anchor.set(0.5, 1);
-  sprite.scale.set(scale);
+  /* Everything standing is drawn larger than tuned. See world/scale.ts. */
+  sprite.scale.set(scale * STRUCTURE_SCALE);
   /* Lifted by a few pixels so it sits inside its own shadow, not on its edge. */
   sprite.position.set(0, TILE_H * 0.2);
   group.addChild(sprite);
@@ -201,9 +204,9 @@ export function signFor(garrison: Garrison): Container {
       /*
        * The one place in the game set in blackletter: the name of a place.
        *
-       * Everything else is monospace, because everything else is read in a
+       * Everything else is in the body face, because everything else is read in a
        * hurry and this is not -- you stop walking to read a signpost. The
-       * sentence underneath stays monospace for that reason, so the two are
+       * sentence underneath stays in the body face for that reason, so the two are
        * doing different jobs and look like it.
        */
       fontFamily: '"Pirata One", Georgia, serif',
@@ -218,9 +221,9 @@ export function signFor(garrison: Garrison): Container {
   name.anchor.set(0.5, 0);
 
   const purpose = new Text({
-    text: garrison.purpose,
+    text: bodyText(garrison.purpose),
     style: {
-      fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
+      fontFamily: BODY_FONT,
       fontSize: 16,
       fill: 0xc9a06a,
       align: "center",
@@ -392,9 +395,13 @@ export function buildWorld(app: Application, art: Loaded, kingdom: Kingdom): {
      * whole thing came out as a staircase of roofs.
      */
     const atScreen = (offsetX: number, offsetY: number) => {
-      /* The inverse of `toScreen` without its origin. See the grass below. */
-      const acrossX = offsetX / (TILE_W / 2);
-      const acrossY = offsetY / (TILE_H / 2);
+      /*
+       * The inverse of `toScreen` without its origin. See the grass below.
+       * The offsets are in the pieces' own pixels, so they grow with the
+       * pieces or an enlarged gatehouse swallows its own towers.
+       */
+      const acrossX = (offsetX * STRUCTURE_SCALE) / (TILE_W / 2);
+      const acrossY = (offsetY * STRUCTURE_SCALE) / (TILE_H / 2);
       return {
         x: keep.x + (acrossX + acrossY) / 2,
         y: keep.y - 1 + (acrossY - acrossX) / 2,
@@ -528,7 +535,7 @@ export function buildWorld(app: Application, art: Loaded, kingdom: Kingdom): {
     if (dyed) {
       const standard = new Sprite(dyed);
       standard.anchor.set(0.5, 1);
-      standard.scale.set(0.42);
+      standard.scale.set(0.42 * STRUCTURE_SCALE);
       const at = toScreen(site.x + 3.2, site.y + 3.2);
       standard.position.set(at.x, at.y + TILE_H * 0.2);
       camp.addChild(standard);
@@ -547,9 +554,9 @@ export function buildWorld(app: Application, art: Loaded, kingdom: Kingdom): {
 
   for (const garrison of GARRISONS) {
     for (const building of garrison.buildings) {
-      things.addChild(
-        standing(art.frame(building.sprite), building.x, building.y, building.scale ?? 1),
-      );
+      /* Where the layout puts it once opened up; world/solids.ts agrees. */
+      const at = builtAt(garrison, building);
+      things.addChild(standing(art.frame(building.sprite), at.x, at.y, building.scale ?? 1));
     }
     signs.addChild(signFor(garrison));
   }

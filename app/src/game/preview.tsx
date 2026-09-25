@@ -1,6 +1,7 @@
-import { StrictMode } from "react";
+import { StrictMode, useMemo } from "react";
 import { createRoot } from "react-dom/client";
 import { MemoryRouter } from "react-router-dom";
+import { AuthContext } from "../auth/AuthProvider";
 import GameRoute from "./GameRoute";
 
 /**
@@ -19,11 +20,45 @@ import GameRoute from "./GameRoute";
  * /sessions on the way out, and here there is no session list to land on. In
  * memory that navigation is recorded and changes nothing, so "Quit to boring
  * UI" can be clicked without the page going blank.
+ *
+ * A stand-in identity, the same one qa.tsx supplies, because the garrison poll
+ * asks `useAuth` whose sessions to scope to. Without it this page threw on
+ * mount and showed nothing at all. The service still refuses the stand-in, so
+ * the field falls back to the example garrison, which is what this page is for.
  */
+function SignedIn({ children }: { children: React.ReactNode }) {
+  const value = useMemo(
+    () => ({
+      mode: "firebase" as const,
+      user: {
+        uid: "preview-local",
+        email: "preview@shell.online",
+        displayName: "Preview",
+        emailVerified: true,
+        providerData: [],
+      },
+      initializing: false,
+      signIn: async () => {},
+      signUp: async () => {},
+      signInWithGoogle: async () => {},
+      signInWithProvider: async () => {},
+      resetPassword: async () => {},
+      resendVerification: async () => {},
+      signOutUser: async () => {},
+      deleteAccount: async () => {},
+    }),
+    [],
+  );
+
+  return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
+}
+
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
     <MemoryRouter initialEntries={["/game"]}>
-      <GameRoute />
+      <SignedIn>
+        <GameRoute />
+      </SignedIn>
     </MemoryRouter>
   </StrictMode>,
 );

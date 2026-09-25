@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { atLimit, headroom, openingZoom, plateCeiling, stepZoom, zoomBounds } from "./zoom";
+import { atLimit, headroom, openingZoom, overlayScale, plateCeiling, stepZoom, zoomBounds } from "./zoom";
 
 /** The Marches, in world pixels: 128 tiles at 64 by 32. */
 const WORLD = { width: 128 * 64, height: 128 * 32 };
@@ -86,5 +86,26 @@ describe("how large a name board may grow", () => {
 
   it("never shrinks a board below its drawn size", () => {
     expect(plateCeiling(PHONE.width)).toBeGreaterThanOrEqual(1);
+  });
+});
+
+describe("overlayScale", () => {
+  it("never shrinks a bar or a number below its drawn size", () => {
+    expect(overlayScale(1, 2.6)).toBe(1);
+    expect(overlayScale(3, 2.6)).toBe(1);
+  });
+
+  it("grows against the zoom, up to the ceiling", () => {
+    expect(overlayScale(0.5, 2.6)).toBe(2);
+    expect(overlayScale(0.1, 2.6)).toBe(2.6);
+  });
+
+  it("lets a boosted overlay go further than the ceiling", () => {
+    expect(overlayScale(0.1, 2.6, 1.5)).toBeCloseTo(3.9);
+  });
+
+  it("answers a nonsense zoom with the drawn size", () => {
+    expect(overlayScale(0, 2.6)).toBe(1);
+    expect(overlayScale(Number.NaN, 2.6)).toBe(1);
   });
 });

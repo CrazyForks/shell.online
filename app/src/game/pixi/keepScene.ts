@@ -7,6 +7,8 @@ import { ActorLayer } from "./actors";
 import { Birds, Blows, Dust, loadEffects, Smoke } from "./ambience";
 import { Banners, OrderMark } from "./banners";
 import { McpFlowLayer } from "./mcp-flows";
+import { TrainingFx } from "./training";
+import { isTap, pickSlop, type Press } from "../engine/tap";
 import type { McpFlow } from "../state/mcp-flows";
 import { loadSigils } from "./sigils";
 import type { Scene } from "./PixiStage";
@@ -21,6 +23,7 @@ import {
   type ZoomBounds,
 } from "../engine/zoom";
 import { createSim, garrisonSoldiers, orderHero, tickSim, yourHero, type Actor, type Mark, type Sim } from "../world/sim";
+import { BODY_FONT } from "./fonts";
 
 /**
  * The Marches, assembled and running.
@@ -74,18 +77,45 @@ export interface KeepHandle {
   still(stop: boolean): void;
   /** Rides the camera to a holding, named by id. See the road book. */
   lookAt(garrisonId: string): void;
+  /**
+   * Rides the camera to one figure and opens its card, as a click on it would.
+   * The HUD's list of the player's own sessions is how that is reached.
+   */
+  follow(actorId: string): void;
+  /**
+   * Where the Forge's training button belongs on the canvas, every frame, and
+   * how large it should be drawn at this zoom. `undefined` when the Forge is
+   * off the screen. Written straight to the button's style by the route, for
+   * the same reason `onTrack` is: React at frame rate is a heavy way to move
+   * one box.
+   */
+  onForge?: (at: { x: number; y: number; scale: number } | undefined) => void;
+  /** An order to train has been sent; the Forge lights up until it arrives. */
+  train(): void;
+  /** The order failed; the Forge goes dark again. */
+  cancelTraining(): void;
+  /** A trained soldier has joined the field. */
+  onTrained?: (actorId: string) => void;
 }
 
-/** The style of a floating number. Built here so Blows stays about pooling. */
+/**
+ * The style of a floating number. Built here so Blows stays about pooling.
+ *
+ * Large, and larger again zoomed out (see Blows.zoomed). At twenty pixels a
+ * number was only legible close enough in that the fight filled the screen,
+ * which is not where anybody watches a fight from.
+ */
 function numberFor(text: string, kind: Mark["kind"]): Container {
   const node = new Text({
     text,
+    /* Rasterised at twice the size, so the enlargement does not blur it. */
+    resolution: 2,
     style: {
-      fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
-      fontSize: 20,
-      fontWeight: "700",
-      fill: kind === "damage" ? 0xff8fb0 : 0xe8c65a,
-      stroke: { color: 0x1a1008, width: 5 },
+      fontFamily: BODY_FONT,
+      fontSize: 44,
+      fontWeight: "900",
+      fill: kind === "damage" ? 0xff5a4f : 0xffd84a,
+      stroke: { color: 0x1a1008, width: 9 },
     },
   });
   node.anchor.set(0.5);
@@ -160,6 +190,13 @@ export async function buildKeepScene(
   const smoke = new Smoke(things, fx["fx-smoke_01"]);
   const dust = new Dust(things, fx["fx-smoke_01"]);
   const blows = new Blows(things, fx, numberFor);
+  /* The training yard is the Forge, where things that did not exist are made. */
+  const forge = GARRISONS.find((holding) => holding.id === "forge") ?? GARRISONS[0];
+  /*
+   * On the world rather than among the things: that layer is dusk-tinted, and
+   * a light tinted towards evening is a light nobody can see.
+   */
+  const training = new TrainingFx(world, fx, { x: forge.x, y: forge.y + 1 });
 
   handle.select = (id) => {
     selected = id;
@@ -181,7 +218,10 @@ export async function buildKeepScene(
      * legible, so the setting takes the flicker and leaves the light.
      */
     lanterns.still(stop);
+    training.still(stop);
   };
+  handle.train = () => training.begin(sim);
+  handle.cancelTraining = () => training.cancel();
   handle.lookAt = (garrisonId) => {
     const garrison = GARRISONS.find((holding) => holding.id === garrisonId);
     if (!garrison) return;
@@ -199,6 +239,21 @@ export async function buildKeepScene(
       time: 600,
       ease: "easeInOutSine",
     });
+  };
+
+  handle.follow = (actorId) => {
+    const actor = sim.actors.find((one) => one.id === actorId);
+    if (!actor) return;
+    const { x, y } = toScreen(actor.x, actor.y);
+    const scale = Math.max(viewport.scale.x, settled());
+    viewport.animate({
+      position: { x, y: y - headroom(app.screen.height) / scale },
+      scale,
+      time: 600,
+      ease: "easeInOutSine",
+    });
+    selected = actor.id;
+    handle.onPick?.(actor);
   };
 
   /*
@@ -244,7 +299,32 @@ export async function buildKeepScene(
    */
   app.stage.eventMode = "static";
   app.stage.hitArea = app.screen;
-  const onTap = (event: { global: { x: number; y: number } }) => {
+
+  /*
+   * Where the current press began, and whether a second finger joined it, so
+   * the end of a pan or a pinch is not mistaken for a tap. See engine/tap.ts.
+   */
+  const down = new Set<number>();
+  let press: Press | undefined;
+  const onDown = (event: { pointerId: number; global: { x: number; y: number } }) => {
+    down.add(event.pointerId);
+    if (down.size === 1) press = { x: event.global.x, y: event.global.y, multi: false };
+    else if (press) press.multi = true;
+  };
+  const onUp = (event: { pointerId: number }) => {
+    down.delete(event.pointerId);
+  };
+  app.stage.on("pointerdown", onDown);
+  app.stage.on("pointerup", onUp);
+  app.stage.on("pointerupoutside", onUp);
+  app.stage.on("pointercancel", onUp);
+
+  const onTap = (event: { global: { x: number; y: number }; pointerType: string }) => {
+    const pressed = press;
+    /* Only once every finger is up, so a pinch's first lift is not a tap either. */
+    if (down.size > 0) return;
+    press = undefined;
+    if (!isTap(pressed, event.global.x, event.global.y, event.pointerType)) return;
     const world = viewport.toWorld(event.global.x, event.global.y);
     const tile = toTile(world.x, world.y);
 
@@ -258,7 +338,12 @@ export async function buildKeepScene(
         .filter((actor) => actor.role === "hero" || actor.role === "soldier")
         .map((actor) => [`${actor.id}`, actor] as const),
     );
-    const hit = actors.hit(world.x, world.y, (id) => inspectable.has(id));
+    const hit = actors.hit(
+      world.x,
+      world.y,
+      (id) => inspectable.has(id),
+      pickSlop(event.pointerType) / viewport.scale.x,
+    );
     const nearest = hit ? inspectable.get(hit) : undefined;
 
     if (nearest) {
@@ -353,6 +438,25 @@ export async function buildKeepScene(
     handle.onTrack(viewport.toScreen(world.x, world.y));
   };
 
+  /*
+   * The Forge's button, placed over the front of its yard.
+   *
+   * Sized with the zoom, so it reads as a thing standing at the Forge rather
+   * than a sticker on the glass -- and never below the size a thumb can hit,
+   * which is the floor the rest of the interface holds.
+   */
+  const forgeFront = toScreen(forge.x, forge.y + 2.5);
+  const placeForge = () => {
+    if (!handle.onForge) return;
+    const at = viewport.toScreen(forgeFront.x, forgeFront.y);
+    const margin = 40;
+    if (at.x < -margin || at.y < -margin || at.x > app.screen.width + margin || at.y > app.screen.height + margin) {
+      handle.onForge(undefined);
+      return;
+    }
+    handle.onForge({ x: at.x, y: at.y, scale: Math.min(1.5, Math.max(0.85, viewport.scale.x * 1.4)) });
+  };
+
   let found = false;
   const findYou = () => {
     if (found) return;
@@ -395,6 +499,7 @@ export async function buildKeepScene(
       sign.visible = left >= 8 && top >= 8 && right <= app.screen.width - 8 && bottom <= app.screen.height - 8;
     }
     actors.zoomed(viewport.scale.x, plateCeiling(app.screen.width));
+    blows.zoomed(viewport.scale.x, plateCeiling(app.screen.width));
     /*
      * The controls are told from here rather than from their own listener:
      * this already runs on every zoom and every frame of a drag, and a second
@@ -448,6 +553,7 @@ export async function buildKeepScene(
       findYou();
       heldCamps();
       track();
+      placeForge();
       /* Only the camps somebody is actually holding are standing. */
       for (const [key, camp] of camps) camp.visible = held.has(key);
       companies.sync(sim);
@@ -455,6 +561,8 @@ export async function buildKeepScene(
       actors.sync(sim, selected);
       mcpFlows.sync(handle.mcpFlows?.() ?? [], sim.actors, Date.now());
       blows.sync(sim);
+      const arrived = training.tick(sim, deltaMs);
+      if (arrived) handle.onTrained?.(arrived);
       lanterns.tick(deltaMs);
       birds.tick(deltaMs);
       smoke.tick(deltaMs);
@@ -465,6 +573,10 @@ export async function buildKeepScene(
       viewport.off("moved", rescaleSigns);
       app.renderer.off("resize", rescaleSigns);
       app.stage.off("pointertap", onTap);
+      app.stage.off("pointerdown", onDown);
+      app.stage.off("pointerup", onUp);
+      app.stage.off("pointerupoutside", onUp);
+      app.stage.off("pointercancel", onUp);
       companies.destroy();
       orderMark.destroy();
       actors.destroy();
@@ -473,6 +585,7 @@ export async function buildKeepScene(
       smoke.destroy();
       dust.destroy();
       blows.destroy();
+      training.destroy();
     },
   };
 }
