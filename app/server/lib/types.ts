@@ -229,6 +229,20 @@ export interface AccountActivity {
    * outside the store being handed an identifier.
    */
   internal: boolean;
+  /*
+   * How far the account got past signing up, each answered while the store
+   * still has the uid and handed back as a yes or no: the dashboard's
+   * activation funnel is built from these and never learns whose they are.
+   */
+  /** Ran `shell login` on at least one machine, whether or not it is still linked. */
+  machineLinked: boolean;
+  /**
+   * Has at least one session on record. Removing a session deletes its row,
+   * so an account that removed every session it ran reads as never having run one.
+   */
+  sessionStarted: boolean;
+  /** Created at least one invite, accepted or not. */
+  teammateInvited: boolean;
 }
 
 /**

@@ -13,6 +13,7 @@ import {
 import { DAY_MS, peopleCountedSince } from "../shared/stats-snapshot";
 import {
   accountsInsight,
+  activationRows,
   deltaChip,
   formatDuration,
   formatPercent,
@@ -1028,6 +1029,7 @@ function renderAccounts(snapshot: StatsSnapshot): string {
     </section>
 
     <section class="stats-people-grid">
+      ${renderActivation(accounts, snapshot.range === "all" ? "since the first account" : `in ${rangeLabel}`)}
       ${renderEngagement(accounts)}
       ${renderCohorts(
         "Accounts that came back",
@@ -1105,6 +1107,37 @@ function renderEngagement(accounts: StatsAccountStats): string {
           `).join("")}
       </div>
       <p class="cohort-empty">Over the accounts that signed up since days started being recorded. An older account is missing the days before that and would read here as one that never came back, so it is left out rather than counted against the product.</p>
+    </article>
+  `;
+}
+
+/**
+ * How far the range's sign-ups got. Every row is a share of the same
+ * sign-ups, in the order a new account usually goes, so the drop between two
+ * rows is where people stop. Left out for an app too old to send it.
+ */
+function renderActivation(accounts: StatsAccountStats, period: string): string {
+  const funnel = accounts.activation;
+  if (funnel === null) return "";
+  const rows = activationRows(funnel);
+  return `
+    <article class="stats-panel breakdown-panel kind-rate kind-band kind-activation">
+      <header class="panel-heading">
+        <div><span class="panel-kicker">Of the accounts that signed up ${escapeHtml(period)}</span><h2>How far they got</h2></div>
+        <strong>${integerFormatter.format(funnel.base)}</strong>
+      </header>
+      <div class="breakdown-list">
+        ${rows.length === 0
+          ? `<em>No account signed up ${escapeHtml(period)}.</em>`
+          : rows.map((row) => `
+            <div>
+              <span>${escapeHtml(row.label)}</span>
+              <i><b style="width:${Math.max(2, row.share * 100)}%"></b></i>
+              <strong>${formatPercent(row.share)} <small>${integerFormatter.format(row.value)}</small></strong>
+            </div>
+          `).join("")}
+      </div>
+      <p class="cohort-empty">Each row is a share of these sign-ups, counted once however many times they did it. A machine counts even if it was unlinked later and an invite whether or not it was accepted, but a session only while it is still listed: an account that removed every session it ran is not counted as having run one. Another day means active on two or more separate days, the sign-up day included.</p>
     </article>
   `;
 }

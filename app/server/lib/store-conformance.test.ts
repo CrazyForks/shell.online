@@ -2188,7 +2188,7 @@ for (const implementation of implementations) {
         await store.touchMembership("uid-1", noon + day);
         await store.touchMembership("nobody", noon);
         expect(await store.accountActivity()).toEqual([
-          { joinedAt: 1000, days: [10 * day, 11 * day], internal: false },
+          { joinedAt: 1000, days: [10 * day, 11 * day], internal: false, machineLinked: false, sessionStarted: false, teammateInvited: false },
         ]);
       });
 
@@ -2202,8 +2202,47 @@ for (const implementation of implementations) {
           return email.endsWith("@example.com");
         });
         expect(asked).toEqual(["ana@example.com"]);
-        expect(rows).toEqual([{ joinedAt: 1000, days: [10 * day], internal: true }]);
+        expect(rows).toEqual([{ joinedAt: 1000, days: [10 * day], internal: true, machineLinked: false, sessionStarted: false, teammateInvited: false }]);
         expect(JSON.stringify(rows)).not.toContain("example.com");
+      });
+
+      it("says how far each account got as yes or no, and only for that account", async () => {
+        await store.putOrganization(organization());
+        await store.putMembership(membership());
+        await store.putMembership(membership({ uid: "uid-2", email: "ben@example.com", joinedAt: 2000 }));
+        await store.putToken(token());
+        await store.putToken(token({ id: "dev_2", accessHash: "access-2", refreshHash: "refresh-2" }));
+        await store.upsertSession(session());
+        await store.putInvite(invite());
+        const rows = (await store.accountActivity()).sort((left, right) => left.joinedAt - right.joinedAt);
+        expect(rows.map(({ machineLinked, sessionStarted, teammateInvited }) =>
+          ({ machineLinked, sessionStarted, teammateInvited }))).toEqual([
+          { machineLinked: true, sessionStarted: true, teammateInvited: true },
+          { machineLinked: false, sessionStarted: false, teammateInvited: false },
+        ]);
+      });
+
+      it("still counts a machine that was unlinked, and stops counting a session once it is removed", async () => {
+        await store.putOrganization(organization());
+        await store.putMembership(membership());
+        await store.putToken(token());
+        await store.upsertSession(session());
+        expect(await store.revokeDevice("uid-1", "dev_1")).toBe(true);
+        expect(await store.deleteSession("org_1", "s1")).toBe(true);
+        const [row] = await store.accountActivity();
+        expect(row).toMatchObject({ machineLinked: true, sessionStarted: false });
+      });
+
+      it("does not credit an account with what a teammate did", async () => {
+        await store.putOrganization(organization());
+        await store.putMembership(membership());
+        await store.putMembership(membership({ uid: "uid-2", email: "ben@example.com", joinedAt: 2000 }));
+        await store.putToken(token({ uid: "uid-2", email: "ben@example.com" }));
+        await store.upsertSession(session({ uid: "uid-2", ownerUid: "uid-2", assigneeUid: "uid-2" }));
+        await store.putInvite(invite({ createdBy: "uid-2" }));
+        const rows = (await store.accountActivity()).sort((left, right) => left.joinedAt - right.joinedAt);
+        expect(rows[0]).toMatchObject({ machineLinked: false, sessionStarted: false, teammateInvited: false });
+        expect(rows[1]).toMatchObject({ machineLinked: true, sessionStarted: true, teammateInvited: true });
       });
 
       it("keeps the days through a membership rewrite and drops them with the account", async () => {
